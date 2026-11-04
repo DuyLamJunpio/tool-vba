@@ -1,0 +1,13 @@
+Option Explicit
+
+Private Sub Workbook_Open()
+    On Error GoTo OpenFailed
+
+    License_Initialize
+    If Not License_PremiumAllowed() Then License_ShowGuidance
+    Exit Sub
+
+OpenFailed:
+    ' A license-check failure must not close or block the workbook.
+    License_ShowGuidance
+End Sub

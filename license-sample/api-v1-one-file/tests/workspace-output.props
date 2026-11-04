@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)..\TestResults\dotnet\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(MSBuildProjectDirectory)\obj\</MSBuildProjectExtensionsPath>
+    <ProjectAssetsFile>$(MSBuildProjectDirectory)\obj\project.assets.json</ProjectAssetsFile>
+    <OutputPath>$(MSBuildThisFileDirectory)..\TestResults\dotnet\bin\$(MSBuildProjectName)\</OutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)\obj\**;$(MSBuildProjectDirectory)\bin\**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

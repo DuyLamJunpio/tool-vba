@@ -1,0 +1,2 @@
+# Generated regression modules contain synthetic signed fixtures; never ship them.
+/TestResults/
