@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!-- Public release settings (API URL, release public key). Not secrets; see release.props. -->
+  <Import Project="release.props" Condition="Exists('release.props')" />
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
@@ -8,7 +11,19 @@
     <AssemblyName>tool-vba</AssemblyName>
     <RootNamespace>ToolVba.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <StartupObject>ToolVba.App.Program</StartupObject>
+    <Version Condition="'$(Version)' == ''">1.0.0</Version>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="ToolVbaApiBaseUrl" Value="$(ToolVbaApiBaseUrl)" />
+    <AssemblyMetadata Include="ToolVbaReleasePublicKey" Value="$(ToolVbaReleasePublicKey)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="../ToolVba.Core/ToolVba.Core.csproj" />
   </ItemGroup>

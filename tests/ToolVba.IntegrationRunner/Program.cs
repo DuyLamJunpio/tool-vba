@@ -4,11 +4,19 @@ using ToolVba.Core;
 if (args.Length == 5 && args[0].Equals("--bas", StringComparison.OrdinalIgnoreCase))
     return await RunBasIntegrationAsync(args[1], args[2], args[3], args[4]);
 
+if (args.Length == 2 && args[0].Equals("--selftest", StringComparison.OrdinalIgnoreCase))
+    return await PackageSelfTest.RunAsync(args[1]);
+
+if (args.Length == 4 && args[0].Equals("--package", StringComparison.OrdinalIgnoreCase))
+    return await RunPackageInstallAsync(args[1], args[2], args[3]);
+
 if (args.Length != 3)
 {
     Console.Error.WriteLine("Cách dùng:");
     Console.Error.WriteLine("  ToolVba.IntegrationRunner <workbook.xlsx|xlsm> <vbaProject.bin> <output.xlsm>");
     Console.Error.WriteLine("  ToolVba.IntegrationRunner --bas <workbook.xlsm> <module.bas> <manifest.json> <output.xlsm>");
+    Console.Error.WriteLine("  ToolVba.IntegrationRunner --selftest <thư-mục-trống>   (cần Excel; dùng file tổng hợp)");
+    Console.Error.WriteLine("  ToolVba.IntegrationRunner --package <workbook.xlsx|xlsm> <package.zip> <output.xlsm>   (cài một gói code VBA, không cần chữ ký)");
     return 2;
 }
 
@@ -143,5 +151,32 @@ static async Task<int> RunBasIntegrationAsync(string inputArg, string moduleArg,
     {
         Console.Error.WriteLine("FAIL: Không thể hoàn thành kiểm thử do lỗi truy cập file hoặc đường dẫn.");
         return 1;
+    }
+}
+
+// Installs a package zip (for example one built by the API from an .xlsm) into a copy of a workbook.
+// Signature checks belong to the app's download path; this mode is for manual testing only.
+static async Task<int> RunPackageInstallAsync(string workbookArg, string zipArg, string outputArg)
+{
+    var extract = Path.Combine(Path.GetTempPath(), $"tool-vba-runner-{Guid.NewGuid():N}");
+    try
+    {
+        var read = new VbaPackageReader().Read(Path.GetFullPath(zipArg), "0.0.0.1", extract);
+        if (!read.IsValid)
+        {
+            Console.Error.WriteLine("FAIL: Gói không hợp lệ: " + read.Error);
+            return 1;
+        }
+        Console.WriteLine("Gói gồm: " + string.Join(", ", read.Package!.Components.Select(c => $"{c.Name} ({c.Kind})")));
+        var progress = new Progress<VbaInstallProgress>(p => Console.WriteLine(p.Stage));
+        var result = await new VbaPackageInstallService().InstallAsync(
+            new VbaPackageInstallRequest(Path.GetFullPath(workbookArg), Path.GetFullPath(outputArg), read.Package!), progress);
+        Console.WriteLine((result.Succeeded ? "PASS: " : "FAIL: ") + result.Message);
+        foreach (var warning in result.Warnings ?? []) Console.WriteLine("Cảnh báo: " + warning);
+        return result.Succeeded ? 0 : 1;
+    }
+    finally
+    {
+        try { Directory.Delete(extract, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 }

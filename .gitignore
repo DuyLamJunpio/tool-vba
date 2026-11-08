@@ -5,3 +5,6 @@
 *.suo
 /Tạo hồ sơ.xlsx
 /HR_Quan_ly_nhan_su_v2.0.xlsm
+
+# Local release output (scripts/publish-app.ps1)
+/out/

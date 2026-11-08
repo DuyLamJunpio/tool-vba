@@ -32,12 +32,40 @@ public sealed class SafeOperationAuditLog
                 SafeFileName(request.OutputPath),
                 result.Succeeded ? "PASS" : "FAIL",
                 result.Message,
-                typeof(SafeOperationAuditLog).Assembly.GetName().Version?.ToString() ?? "unknown");
+                ToolVersion);
+            return Append(JsonSerializer.Serialize(record));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
 
+    /// <summary>Records file names, hashes and the package version only; never workbook or VBA content.</summary>
+    public bool TryWritePackageInstall(VbaPackageInstallRequest request, VbaPackageInstallResult result)
+    {
+        var record = new PackageInstallRecord(
+            DateTimeOffset.UtcNow,
+            SafeFileName(request.InputWorkbookPath),
+            TryHash(request.InputWorkbookPath),
+            request.Package.Version,
+            SafeFileName(request.OutputPath),
+            result.Succeeded ? "PASS" : "FAIL",
+            result.Message,
+            ToolVersion);
+        return Append(JsonSerializer.Serialize(record));
+    }
+
+    private static string ToolVersion => typeof(SafeOperationAuditLog).Assembly.GetName().Version?.ToString() ?? "unknown";
+
+    private bool Append(string line)
+    {
+        try
+        {
             var directory = Path.GetDirectoryName(_logPath);
             if (string.IsNullOrWhiteSpace(directory)) return false;
             Directory.CreateDirectory(directory);
-            File.AppendAllText(_logPath, JsonSerializer.Serialize(record) + Environment.NewLine, new UTF8Encoding(false));
+            File.AppendAllText(_logPath, line + Environment.NewLine, new UTF8Encoding(false));
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
@@ -45,6 +73,16 @@ public sealed class SafeOperationAuditLog
             return false;
         }
     }
+
+    private sealed record PackageInstallRecord(
+        DateTimeOffset TimestampUtc,
+        string SourceFileName,
+        string? SourceSha256,
+        string PackageVersion,
+        string OutputFileName,
+        string Status,
+        string Reason,
+        string ToolVersion);
 
     private static string SafeFileName(string path)
     {

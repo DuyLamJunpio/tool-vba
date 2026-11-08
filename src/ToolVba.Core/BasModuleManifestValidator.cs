@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace ToolVba.Core;
 
@@ -11,8 +10,6 @@ public sealed record BasModuleValidationResult(bool IsValid, string? Error, stri
 public sealed class BasModuleManifestValidator
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
-    private static readonly Regex ReservedInputDeclaration = new(
-        @"\b(?:Dim|Const|ByVal|ByRef)\s+Input\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public BasModuleValidationResult Validate(string modulePath, string manifestPath)
     {
@@ -29,7 +26,7 @@ public sealed class BasModuleManifestValidator
         {
             using var manifestStream = File.OpenRead(manifestPath);
             var manifest = JsonSerializer.Deserialize<BasModuleManifest>(manifestStream, JsonOptions);
-            if (manifest is null || string.IsNullOrWhiteSpace(manifest.ModuleName) || manifest.ModuleName.Length > 31 || string.IsNullOrWhiteSpace(manifest.Sha256))
+            if (manifest is null || string.IsNullOrWhiteSpace(manifest.ModuleName) || manifest.ModuleName.Length > VbaSourceRules.MaxComponentNameLength || string.IsNullOrWhiteSpace(manifest.Sha256))
                 return Invalid("Manifest thiếu tên module hợp lệ.");
             if (manifest.Sha256.Length != 64 || !manifest.Sha256.All(Uri.IsHexDigit))
                 return Invalid("SHA-256 trong manifest không hợp lệ.");
@@ -42,13 +39,8 @@ public sealed class BasModuleManifestValidator
             if (!CryptographicOperations.FixedTimeEquals(actualHash, expectedHash))
                 return Invalid("SHA-256 của module không khớp manifest phê duyệt.");
 
-            // Import can succeed even when VBA later rejects a declaration at compile time.
-            // This targeted check prevents the reserved identifier seen in Win32 Declare statements.
-            foreach (var line in File.ReadLines(modulePath))
-            {
-                if (!line.TrimStart().StartsWith("'", StringComparison.Ordinal) && ReservedInputDeclaration.IsMatch(line))
-                    return Invalid("Module dùng từ khóa VBA 'Input' làm tên tham số hoặc biến. Hãy đổi tên rồi cập nhật manifest.");
-            }
+            if (VbaSourceRules.FindReservedInputDeclaration(File.ReadLines(modulePath)) is not null)
+                return Invalid("Module dùng từ khóa VBA 'Input' làm tên tham số hoặc biến. Hãy đổi tên rồi cập nhật manifest.");
 
             return new(true, null, manifest.ModuleName, Convert.ToHexString(actualHash));
         }
