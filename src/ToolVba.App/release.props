@@ -1,0 +1,15 @@
+<Project>
+  <!--
+    Public release settings baked into tool-vba.exe at build time. These are NOT secrets.
+    - ToolVbaApiBaseUrl: base URL of digital-license-api, e.g. https://api.example.com/
+    - ToolVbaReleasePublicKey: base64 SPKI (one line) of the ECDSA P-256 public key whose private
+      half is TOOL_RELEASE_SIGNING_PRIVATE_KEY on the API. Generate with: node scripts/new-release-key.mjs
+    - ToolVbaApiBaseUrl must use https (plain http is accepted only for localhost during development).
+    Leave empty for local development: the app then shows that the update server is not configured.
+    Values can also be passed on the command line: dotnet publish -p:ToolVbaApiBaseUrl=...
+  -->
+  <PropertyGroup>
+    <ToolVbaApiBaseUrl Condition="'$(ToolVbaApiBaseUrl)' == ''"></ToolVbaApiBaseUrl>
+    <ToolVbaReleasePublicKey Condition="'$(ToolVbaReleasePublicKey)' == ''"></ToolVbaReleasePublicKey>
+  </PropertyGroup>
+</Project>

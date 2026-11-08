@@ -2,9 +2,13 @@ using System.Runtime.InteropServices;
 
 namespace ToolVba.Core;
 
-public sealed class ExcelAutomationHost : IExcelAutomationHost
+public sealed class ExcelAutomationHost : IExcelAutomationHost, IVbaWorkbookHost
 {
-    public IExcelAutomationSession Open(string workbookPath, bool readOnly)
+    public IExcelAutomationSession Open(string workbookPath, bool readOnly) => OpenSession(workbookPath, readOnly);
+
+    IVbaWorkbookSession IVbaWorkbookHost.Open(string workbookPath, bool readOnly) => OpenSession(workbookPath, readOnly);
+
+    private ExcelAutomationSession OpenSession(string workbookPath, bool readOnly)
     {
         if (!OperatingSystem.IsWindows())
             throw new ExcelAutomationException("Chế độ thêm module .bas chỉ chạy trên Windows có Microsoft Excel desktop.");
@@ -62,8 +66,10 @@ public sealed class ExcelAutomationHost : IExcelAutomationHost
             CloseAndRelease(application, workbooks, workbook, scratchWorkbook);
             throw new ExcelAutomationException(DescribeComFailure(stage, ex.HResult), ex);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException or ArgumentException
+                                       or InvalidCastException or Microsoft.CSharp.RuntimeBinder.RuntimeBinderException)
         {
+            // Any failure after Excel started must close it, or a hidden EXCEL.EXE is left running.
             CloseAndRelease(application, workbooks, workbook, scratchWorkbook);
             throw new ExcelAutomationException($"Không thể {stage}. Kiểm tra Excel và quyền truy cập workbook.", ex);
         }
@@ -113,7 +119,7 @@ public sealed class ExcelAutomationHost : IExcelAutomationHost
     }
 }
 
-internal sealed class ExcelAutomationSession : IExcelAutomationSession
+internal sealed partial class ExcelAutomationSession : IExcelAutomationSession, IVbaWorkbookSession
 {
     private object? _application;
     private object? _workbooks;
@@ -239,5 +245,5 @@ internal sealed class ExcelAutomationSession : IExcelAutomationSession
     }
 
     private static ExcelAutomationException VbaProjectAccessError(COMException ex) =>
-        new("Excel từ chối truy cập VBA Project. Quản trị viên cần bật “Trust access to the VBA project object model” trên máy đóng gói theo chính sách tổ chức; công cụ không tự đổi Trust Center hoặc Registry.", ex);
+        new("Excel từ chối truy cập VBA Project. Hãy bấm \"Bật giúp tôi\" trong ứng dụng (hoặc nhờ IT bật “Trust access to the VBA project object model”), đóng hết Excel rồi thử lại. File nguồn không bị sửa.", ex);
 }

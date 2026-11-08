@@ -1,97 +1,113 @@
 # Công cụ đóng gói VBA cho Excel
 
-Ứng dụng desktop WPF chạy cục bộ trên Windows. Có hai chế độ tách biệt:
+Ứng dụng WPF chạy trên Windows. Nhân viên **thả file Excel vào và bấm Tạo**: app tự dán bộ code VBA mới nhất của công ty vào một bản sao `.xlsm`, file gốc không bị sửa. Code VBA và bản thân ứng dụng đều được cập nhật tự động từ `digital-license-api`, nhân viên không phải tải file về.
 
-- **Thêm module `.bas` vào `.xlsx` hoặc `.xlsm`:** Excel mở bản tạm, import module đã duyệt và lưu output `.xlsm` riêng. Với `.xlsm` có VBA, các component cũ phải còn hiện diện sau khi lưu.
-- **Chèn toàn bộ `vbaProject.bin`:** dùng Open XML SDK để thêm/thay trọn project binary; chế độ này không ghép module.
+## Dành cho nhân viên
 
-Không chạy macro trong lúc đóng gói. Không gửi workbook hoặc mã VBA ra ngoài máy.
+1. Cài một lần bằng `ToolVba-win-Setup.exe` (link `…/api/v1/tool/app/ToolVba-win-Setup.exe`). Không cần quyền admin.
+2. Mở app, kéo thả một hoặc nhiều file `.xlsx`/`.xlsm` vào cửa sổ (hoặc bấm **Chọn file…**), rồi bấm **Tạo file có VBA**.
+3. Kết quả được lưu cạnh file gốc với tên `<tên>_vba.xlsm`; nếu tên đã có thì tự đánh số `(2)`, `(3)`… Bấm **Đổi nơi lưu** nếu muốn lưu chỗ khác.
 
-## Yêu cầu
+Các thông báo trên màn hình:
 
-- Windows 10/11 và .NET 10 SDK.
-- NuGet được truy cập ở lần restore đầu để tải `DocumentFormat.OpenXml`, xUnit và Microsoft.NET.Test.Sdk.
-- Chế độ `.bas` cần Microsoft Excel desktop đã cài. Quản trị viên phải tự bật “Trust access to the VBA project object model” trên máy đóng gói theo chính sách tổ chức. Tool không bật Trust Center, sửa Registry hay thay đổi thiết lập bảo mật.
+- **Chip phiên bản** ở góc trên: bản code VBA đang dùng. App tự tải bản mới khi mở và trước mỗi lần bấm Tạo. Khi mất mạng, app dùng bản đã lưu gần nhất.
+- **Có phiên bản ứng dụng mới**: bấm **Cập nhật ngay**, app tự tải, cài và mở lại.
+- **Excel chưa cho phép công cụ dán code VBA**: bấm **Bật giúp tôi**. App chỉ bật “Trust access to the VBA project object model” cho riêng tài khoản Windows đó (HKCU) sau khi bạn xác nhận. Nếu chính sách công ty (Group Policy) đang chặn, app chỉ báo liên hệ IT, không ghi gì.
 
-Chế độ `.bas` dùng Excel COM Automation cục bộ, không cài package Office Interop. Nó chỉ chạy trên máy Windows có Excel; không dùng cho web server, Windows Service hay xử lý file khách hàng tải lên.
+### File đã có VBA và file chưa có VBA
+
+| File nguồn | App làm gì |
+| --- | --- |
+| `.xlsx` (chưa có VBA) | Dán toàn bộ code công ty, lưu thành `.xlsm`. |
+| `.xlsm` đã có VBA | Module trùng tên với code công ty được **thay bằng bản mới**. Module do nhân viên tự viết được giữ nguyên. Module do bản cũ của công ty thêm vào nhưng nay đã bỏ thì bị gỡ. |
+| ThisWorkbook / sheet đã có code | Code công ty nằm trong vùng đánh dấu `'=== tool-vba BEGIN … ===`; mỗi lần cập nhật chỉ thay vùng này. Nếu ngoài vùng đã có thủ tục trùng tên (ví dụ `Workbook_Open`), app dừng và nêu tên thủ tục trùng. |
+
+Sau mỗi lần dán, app ghi vào thuộc tính tài liệu `ToolVba.PackageVersion` (phiên bản code) và `ToolVba.Managed.N` (danh sách module do công ty quản lý).
+
+## Dành cho quản trị viên: xuất bản code VBA mới
+
+Việc xuất bản nằm trên **Admin web của digital-license-api** (chỉ tài khoản quản trị), mục **Tải công cụ → Phát hành tool-vba → Xuất bản code VBA**. App desktop không có phần quản trị.
+
+1. Sửa code trong file Excel mẫu `.xlsm` (module `.bas`, class `.cls`, ThisWorkbook, code của sheet). Module tên bắt đầu bằng `modLicense` không được đóng gói.
+2. Tải file `.xlsm` lên (hoặc các file VBA lẻ `.bas`, `.cls`, `.frm` + `.frx`) → **Kiểm tra** để xem danh sách → nhập ghi chú → **Xuất bản cho nhân viên**.
+3. Máy chủ tự tách code, cấp phiên bản (`YYYY.M.D.N`) và ký gói. Nhân viên nhận bản mới ở lần bấm Tạo tiếp theo.
+4. Lỡ xuất bản bản lỗi: ở danh sách bên dưới bấm **Kích hoạt lại** cạnh bản trước.
+
+UserForm: máy chủ không có Excel nên không dựng lại được phần giao diện của form từ `.xlsm`. Nếu file mẫu có UserForm, trang sẽ yêu cầu tải thêm `.frm` + `.frx` (Alt+F11 → chuột phải vào form → Export File).
+
+Ô **Bản ứng dụng tối thiểu** chỉ điền khi code mới cần một bản app mới hơn; khi đó app cũ chặn nút Tạo và yêu cầu cập nhật.
+
+## Phát hành và cấu hình
+
+Hợp đồng API giữa app và máy chủ nằm trong [docs/tool-release-api-contract.md](docs/tool-release-api-contract.md).
+
+**Một lần duy nhất:**
+
+1. Chạy `node scripts/new-release-key.mjs`.
+   - Đặt dòng private key vào biến `TOOL_RELEASE_SIGNING_PRIVATE_KEY` của máy chủ API. Chỉ đặt ở đó, không commit.
+   - Đặt public key vào `ToolVbaReleasePublicKey` trong [src/ToolVba.App/release.props](src/ToolVba.App/release.props), cùng với `ToolVbaApiBaseUrl`.
+2. Áp migration `tool_releases` trên API: `pnpm db:dev:deploy` (xem DEC-111 trong repo API).
+3. Cài vpk: `dotnet tool install -g vpk --version 1.2.161`.
+
+**Mỗi lần ra bản app mới:**
+
+```powershell
+.\scripts\build-app.ps1 -Version 1.0.1
+```
+
+Script build bản self-contained win-x64, đóng gói bằng Velopack (có gói delta) và mở thư mục `out\release\upload`. Tải toàn bộ file trong thư mục đó lên Admin web: **Tải công cụ → Phát hành tool-vba → Phát hành ứng dụng**. Nhân viên thấy banner "Có phiên bản ứng dụng mới" và bấm **Cập nhật ngay**.
+
+**Chuyển đổi:** nhân viên đang dùng bản zip cũ cần chạy `ToolVba-win-Setup.exe` một lần; từ đó app tự cập nhật. Chưa có chứng chỉ ký mã thì Windows SmartScreen sẽ cảnh báo ở lần cài đầu.
+
+Bản build không có `release.props` đã điền (chạy dev) vẫn mở được, nhưng hiển thị “chưa được cấu hình máy chủ cập nhật” và không dán code.
 
 ## Build, test và chạy
 
-Mở PowerShell tại thư mục project:
-
 ```powershell
 cd D:\Code\tool-vba
-dotnet restore ToolVba.sln
 dotnet test ToolVba.sln
-dotnet build src\ToolVba.App\ToolVba.App.csproj -c Release
 dotnet run --project src\ToolVba.App\ToolVba.App.csproj
 ```
 
-Sau khi build, đóng mọi cửa sổ `tool-vba` cũ trước khi mở bản mới. Bản mới nằm tại `artifacts\tool-vba-vba-source-fix-5\tool-vba.exe`; tiêu đề cửa sổ có chuỗi `VBA source fix 5` để phân biệt với các bản cũ.
-
-Để phát hành bản tự chứa cho Windows x64:
+Self-test với Excel thật. Chỉ dùng file tổng hợp; cần Excel và quyền VBA Project đã bật:
 
 ```powershell
-dotnet publish src\ToolVba.App\ToolVba.App.csproj -c Release -r win-x64 --self-contained true
+dotnet run --project tests\ToolVba.IntegrationRunner\ToolVba.IntegrationRunner.csproj -- --selftest D:\Temp\tool-vba-selftest
 ```
 
-Integration runner cho chế độ binary:
+Self-test chạy lần lượt các bước:
 
-```powershell
-dotnet run --project tests\ToolVba.IntegrationRunner\ToolVba.IntegrationRunner.csproj -- "D:\path\source.xlsx" "D:\path\vbaProject.bin" "D:\path\result.xlsm"
-```
+1. Cài gói v1 vào `.xlsx`.
+2. Thêm một module của nhân viên, rồi cập nhật lên v2.
+3. Kiểm tra: module của nhân viên còn nguyên, module đã bỏ bị gỡ, không có tên kiểu `modReport1`, ThisWorkbook có đúng một vùng code.
+4. Xác nhận app từ chối khi file có sẵn `Workbook_Open` trùng tên.
 
-Integration runner cho chế độ `.bas` (cần Excel và quyền VBA Project Object Model đã được quản trị viên cấu hình):
+Integration runner còn giữ hai chế độ cũ là `--bas` (một module + manifest) và chèn `vbaProject.bin`.
 
-```powershell
-dotnet run --project tests\ToolVba.IntegrationRunner\ToolVba.IntegrationRunner.csproj -- --bas "D:\path\source.xlsx" "D:\path\module.bas" "D:\path\module.manifest.json" "D:\path\result.xlsm"
-```
+## An toàn dữ liệu
 
-Runner không ghi đè output; nó so hash nguồn trước/sau và giữ output để kiểm tra thủ công.
-
-## Cách dùng
-
-### Thêm module `.bas`
-
-1. Chọn `.xlsx` hoặc `.xlsm` hợp lệ, file `.bas`, manifest JSON có `moduleName` và SHA-256, rồi chọn output `.xlsm` mới. Không cần file `vbaProject.bin`.
-2. Xác nhận tóm tắt. Nếu output đã tồn tại, xác nhận ghi đè riêng.
-3. Đóng workbook nguồn trong các cửa sổ Excel đang mở. Tool xác minh hash module, tên module không trùng, tạo bản tạm và mở bản tạm bằng Excel với macro bị vô hiệu, event tắt, liên kết ngoài không cập nhật và calculation ở chế độ thủ công.
-4. Tool import module. Với nguồn `.xlsx`, Excel lưu bản tạm thành `.xlsm`; với nguồn `.xlsm`, Excel lưu bản tạm hiện có. Tool mở lại file `.xlsm` để xác nhận component cũ và module mới còn hiện diện, kiểm tra package Open XML và hash nguồn, rồi mới chuyển thành output.
-
-Nếu Excel chặn truy cập project, tool dừng và báo cần quản trị viên cấu hình quyền phù hợp. Tool không tự bật quyền này. Nếu import thất bại, input và output có sẵn được giữ nguyên; file tạm được dọn best-effort.
-
-Mẫu giấy phép một file ở `license-sample/api-v1-one-file/` đã có cổng khởi động: chưa có quyền thì thông báo rồi đóng **workbook đó** sau OK/X, không thoát Excel hoặc workbook khác. Mẫu còn thiếu API mã thiết bị, cấu hình khóa công khai và bộ xác minh Ed25519, nên chưa dùng để phát hành cho khách. Hợp đồng API cần bổ sung và ca kiểm thử nằm trong `license-sample/api-v1-one-file/DEVICE-CODE-CONTRACT.md` và `tests/manual/DeviceCodeActivationSmokeTest.md`.
-
-Nếu Excel Automation báo COM `0x800A03EC`, công cụ nêu chính xác bước cấu hình Excel gặp lỗi. Công cụ tạo một workbook trống tạm để đặt tính toán thủ công trước khi mở file nguồn, rồi đóng workbook trống mà không lưu. Macro và sự kiện vẫn bị tắt trước khi workbook nguồn được mở. Với nguồn `.xlsx` chưa có VBA project, khi kiểm tra sau lưu công cụ yêu cầu module mới tồn tại; với nguồn `.xlsm` đã có VBA project, công cụ còn kiểm tra tất cả tên component VBA gốc. Số component có thể tăng do Excel tạo thêm component, nên không còn yêu cầu số lượng đúng bằng số cũ cộng một.
-
-### Chèn toàn bộ `vbaProject.bin`
-
-Chọn `.xlsx` hoặc `.xlsm`, binary `.bin` đã được duyệt và output `.xlsm`. Nếu input đã có project, chế độ này sẽ yêu cầu xác nhận thay **toàn bộ** project. Chỉ tiếp tục nếu binary mới đã chứa mọi mã cần giữ.
-
-## Kiểm thử thủ công bằng Excel
-
-Thực hiện trên bản sao hoặc output riêng, theo chính sách bảo mật của tổ chức:
-
-1. Chạy `tests/manual/WorkbookSmokeTest.md` với workbook `.xlsm` có VBA và module test mẫu.
-2. Mở output trong Excel trên máy thử nghiệm. Trong lúc đóng gói, tool không bật hay chạy macro.
-3. Xác nhận module mới và component VBA cũ còn trong Project Explorer. Chỉ chạy `ToolVbaSmokeTest` nếu được chính sách tổ chức cho phép.
-4. Đối chiếu hash input trước/sau. Không xem việc module xuất hiện là bằng chứng macro an toàn, hợp lệ nghiệp vụ hay có chữ ký hợp lệ.
-
-## Giới hạn và bảo vệ dữ liệu
-
-- Cả hai chế độ nhận nguồn `.xlsx` hoặc `.xlsm`. Output luôn là `.xlsm`; chế độ `.bas` cần Excel desktop và quyền truy cập VBA Project Object Model.
-- Chế độ thêm module chỉ nhận một module chuẩn `.bas`; không hỗ trợ `.cls`, `.frm`, `.frx`, ActiveX hoặc tự thêm references. Tên module đã tồn tại thì từ chối, không thay module cũ.
-- Workbook nguồn luôn được giữ nguyên. Output chỉ thay sau khi kiểm tra đạt; không ghi đè âm thầm.
-- Chế độ Excel có thể chuẩn hóa metadata khi lưu. Tool xác nhận component VBA cũ còn tên và không bị xóa, nhưng không tuyên bố project cũ giữ nguyên từng byte; chữ ký cũ có thể mất hiệu lực.
-- Không ghi nội dung workbook/VBA hay stack trace vào log hoặc giao diện. Tool chỉ hash file module và đọc tên các component VBA để xác nhận giữ lại.
-- Thay đổi project có thể làm chữ ký VBA/package cũ mất hiệu lực. Tool cảnh báo artifact chữ ký nhưng không xác minh hay tự ký.
-- Không hỗ trợ `.xls`, `.xlsb`, `.xltx`, Word, Access, PowerPoint hoặc định dạng khác.
-- Workbook `Tạo hồ sơ.xlsx` và `HR_Quan_ly_nhan_su_v2.0.xlsm` do người dùng cung cấp được giữ tại chỗ và loại trừ bằng `.gitignore`; không đưa workbook khách hàng hay binary VBA thật vào repository.
+- File nguồn luôn được giữ nguyên.
+  - Excel chỉ làm việc trên bản tạm, với macro, sự kiện và cập nhật liên kết đều tắt.
+  - App mở lại bản đã lưu để xác minh, so lại hash nguồn, rồi mới chuyển bản tạm thành file kết quả.
+- Gói code được kiểm tra theo nhiều lớp:
+  - Chữ ký ECDSA P-256 của máy chủ.
+  - SHA-256 của file zip và của từng file bên trong.
+  - Chặn zip-slip và zip bomb.
+- App copy gói sang thư mục riêng và kiểm tra lại ngay trước khi import, nên cache bị sửa trên đĩa không ảnh hưởng tới code được dán.
+- Log cục bộ `%LocalAppData%\ToolVba\logs\operations.jsonl` chỉ ghi tên file, hash, phiên bản gói và kết quả; không ghi nội dung workbook hay code VBA.
+- Rủi ro đã chấp nhận: máy chủ ký gói, nên **tài khoản ADMIN bị lộ có thể phát tán macro**. Dùng mật khẩu mạnh và giới hạn số người có quyền ADMIN.
+- Chữ ký VBA hoặc chữ ký package cũ có thể mất hiệu lực sau khi dán code.
+- Excel tiếng Việt đặt tên module workbook là `SổlàmviệcNày`. Excel làm mất tên này khi lưu `.xlsm` (module mất tên, sự kiện workbook không chạy). Vì vậy app đổi tên module này thành `ThisWorkbook` trước khi dán; từ khóa `ThisWorkbook` trong VBA không bị ảnh hưởng. File nào đã bị Excel làm mất tên module thì app dừng và hướng dẫn sửa.
+- Không hỗ trợ `.xls`, `.xlsb`, `.xltx` hoặc định dạng khác.
 
 ## Thành phần
 
-- `src/ToolVba.App`: WPF UI/MVVM với hai chế độ.
-- `src/ToolVba.Core`: xử lý Open XML, xác minh manifest, Excel Automation và ghi file tạm an toàn.
-- `tests/ToolVba.Tests`: unit test fixture tổng hợp, chạy không cần mở Excel.
-- `tests/ToolVba.IntegrationRunner`: runner thủ công cho workbook thật; `.bas` runner cần Excel đã được cấu hình theo chính sách.
-# tool-vba
+| Thư mục | Nội dung |
+| --- | --- |
+| `src/ToolVba.App` | WPF một màn hình cho nhân viên; tự cập nhật bằng Velopack |
+| `src/ToolVba.Core/Packages` | Đọc/tạo gói, gộp ThisWorkbook/sheet, kiểm chữ ký |
+| `src/ToolVba.Core/Updates` | Tải, kiểm chữ ký và cache gói từ API |
+| `src/ToolVba.Core/Excel` | Thao tác VBA project qua Excel COM |
+| `tests/ToolVba.Tests` | Unit test, không cần Excel |
+| `tests/ToolVba.IntegrationRunner` | Self-test và runner thủ công với Excel thật |
+| `scripts/` | Tạo khóa ký, build bản app để tải lên Admin web |

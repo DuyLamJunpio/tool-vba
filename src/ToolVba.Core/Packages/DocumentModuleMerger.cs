@@ -1,0 +1,188 @@
+using System.Text.RegularExpressions;
+
+namespace ToolVba.Core;
+
+public sealed record DocumentMergeResult(bool Succeeded, string? Code, IReadOnlyList<string> ConflictingNames, string? Error)
+{
+    public static DocumentMergeResult Conflict(IReadOnlyList<string> names) =>
+        new(false, null, names, "Trùng tên với code có sẵn: " + string.Join(", ", names) + ".");
+
+    public static DocumentMergeResult Failure(string error) => new(false, null, [], error);
+}
+
+/// <summary>
+/// Merges company code into a document module (ThisWorkbook or a sheet) that may already hold employee code.
+/// Company declarations go into a marked region after the existing declarations; company procedures go
+/// into a marked region at the end. Earlier managed regions are replaced, never duplicated.
+/// Name detection is a best-effort line scan: it covers the common forms that would otherwise cause an
+/// "Ambiguous name detected" compile error.
+/// </summary>
+public static class DocumentModuleMerger
+{
+    public const string DeclarationsBegin = "'=== tool-vba BEGIN declarations (auto-managed, do not edit) ===";
+    public const string DeclarationsEnd = "'=== tool-vba END declarations ===";
+    public const string CodeBegin = "'=== tool-vba BEGIN code (auto-managed, do not edit) ===";
+    public const string CodeEnd = "'=== tool-vba END code ===";
+
+    private const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    private static readonly Regex ProcedureStart = new(
+        @"^\s*(?:(?:Public|Private|Friend)\s+)?(?:Static\s+)?(?:Sub|Function|Property\s+(?:Get|Let|Set))\s+([A-Za-z_][A-Za-z0-9_]*)", Options);
+    private static readonly Regex OptionLine = new(@"^\s*Option\s+(Explicit|Base|Compare|Private\s+Module)\b", Options);
+    private static readonly Regex[] DeclarationNames =
+    [
+        new(@"^\s*(?:(?:Public|Private|Global)\s+)?Declare\s+(?:PtrSafe\s+)?(?:Sub|Function)\s+([A-Za-z_]\w*)", Options),
+        new(@"^\s*(?:(?:Public|Private)\s+)?(?:Type|Enum|Event)\s+([A-Za-z_]\w*)", Options),
+        new(@"^\s*(?:(?:Public|Private|Global)\s+)?Const\s+([A-Za-z_]\w*)", Options),
+        new(@"^\s*(?:Dim|Public|Private|Global)\s+(?:WithEvents\s+)?(?!(?:Declare|Type|Enum|Event|Const|Sub|Function|Property|Static)\b)([A-Za-z_]\w*)", Options)
+    ];
+
+    public static DocumentMergeResult Merge(string existingCode, string packageCode)
+    {
+        var withoutRegions = RemoveManagedRegions(SplitLines(existingCode));
+        if (withoutRegions is null)
+            return DocumentMergeResult.Failure("Vùng code tool-vba trong module thiếu dòng END nên không thể thay an toàn. " +
+                                               "Hãy mở Alt+F11, xóa vùng code tool-vba bị sửa dở rồi thử lại.");
+        var user = TrimBlankEdges(withoutRegions);
+        // A template that was itself produced by this tool still carries marker lines; they must not nest.
+        var package = SplitLines(StripMarkers(packageCode))
+            .Where(l => !l.TrimStart().StartsWith("Attribute VB_", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        var packageSplit = FirstProcedure(package);
+        var packageOptions = package.Take(packageSplit).Where(IsOption).ToList();
+        var packageDeclarations = TrimBlankEdges(package.Take(packageSplit).Where(l => !IsOption(l)).ToList());
+        var packageProcedures = TrimBlankEdges(package.Skip(packageSplit).ToList());
+
+        var userSplit = FirstProcedure(user);
+        var conflicts = Names(packageProcedures, ProcedureNames).Concat(Names(packageDeclarations, DeclarationNamesOf))
+            .Intersect(Names(user, ProcedureNames).Concat(Names(user.Take(userSplit).ToList(), DeclarationNamesOf)), StringComparer.OrdinalIgnoreCase)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (conflicts.Count > 0) return DocumentMergeResult.Conflict(conflicts);
+
+        var (missingOptions, optionError) = MissingOptions(packageOptions, user.Take(userSplit).Where(IsOption).ToList(), user);
+        if (optionError is not null) return DocumentMergeResult.Failure(optionError);
+
+        var result = new List<string>(missingOptions);
+        result.AddRange(TrimBlankEdges(user.Take(userSplit).ToList()));
+        if (packageDeclarations.Count > 0)
+            AppendRegion(result, DeclarationsBegin, packageDeclarations, DeclarationsEnd);
+        var userProcedures = TrimBlankEdges(user.Skip(userSplit).ToList());
+        if (userProcedures.Count > 0)
+        {
+            if (result.Count > 0) result.Add("");
+            result.AddRange(userProcedures);
+        }
+        if (packageProcedures.Count > 0)
+            AppendRegion(result, CodeBegin, packageProcedures, CodeEnd);
+        return new(true, string.Join("\r\n", result) + "\r\n", [], null);
+    }
+
+    public static bool ContainsManagedCode(string code) =>
+        SplitLines(code).Any(l => IsMarker(l, DeclarationsBegin) || IsMarker(l, CodeBegin));
+
+    /// <summary>Removes only the marker lines, keeping the code between them.</summary>
+    public static string StripMarkers(string code) =>
+        string.Join("\r\n", SplitLines(code).Where(l =>
+            !IsMarker(l, DeclarationsBegin) && !IsMarker(l, DeclarationsEnd) && !IsMarker(l, CodeBegin) && !IsMarker(l, CodeEnd)));
+
+    /// <summary>True when a module has nothing but blank lines, comments and Option statements.</summary>
+    public static bool IsEffectivelyEmpty(string code) =>
+        SplitLines(code).All(l => string.IsNullOrWhiteSpace(l) || IsOption(l) || l.TrimStart().StartsWith('\''));
+
+    /// <summary>
+    /// Option statements of the package that the module still needs. Option Explicit is never required
+    /// (code that compiles with it also compiles without it); a different value of the same option
+    /// (Compare Text vs Binary, Base 0 vs 1) would change existing code, so it is refused.
+    /// </summary>
+    private static (List<string> Missing, string? Error) MissingOptions(
+        IReadOnlyList<string> packageOptions, IReadOnlyList<string> userOptions, IReadOnlyList<string> user)
+    {
+        var missing = new List<string>();
+        foreach (var option in packageOptions)
+        {
+            var keyword = OptionKeyword(option);
+            if (keyword == "explicit") continue;
+            var existing = userOptions.FirstOrDefault(u => OptionKeyword(u) == keyword);
+            if (existing is null) missing.Add(option.Trim());
+            else if (!Normalize(existing).Equals(Normalize(option), StringComparison.OrdinalIgnoreCase))
+                return ([], $"Module đang dùng '{existing.Trim()}' nhưng code công ty cần '{option.Trim()}'. Hãy thống nhất dòng Option này.");
+        }
+        var userHasCode = user.Any(l => !string.IsNullOrWhiteSpace(l) && !IsOption(l) && !l.TrimStart().StartsWith('\''));
+        return missing.Count > 0 && userHasCode
+            ? ([], $"Code công ty cần '{missing[0]}' nhưng module đã có code khác. Hãy thêm dòng này vào file Excel hoặc bỏ khỏi code mẫu.")
+            : (missing, null);
+    }
+
+    private static string OptionKeyword(string line)
+    {
+        var match = OptionLine.Match(line);
+        return match.Success ? Regex.Replace(match.Groups[1].Value, @"\s+", " ").ToLowerInvariant() : "";
+    }
+
+    /// <summary>Removes earlier managed regions; null when a region has no END marker, so nothing is lost silently.</summary>
+    private static List<string>? RemoveManagedRegions(IEnumerable<string> lines)
+    {
+        var kept = new List<string>();
+        string? closing = null;
+        foreach (var line in lines)
+        {
+            if (closing is not null)
+            {
+                if (IsMarker(line, closing)) closing = null;
+                continue;
+            }
+            if (IsMarker(line, DeclarationsBegin)) closing = DeclarationsEnd;
+            else if (IsMarker(line, CodeBegin)) closing = CodeEnd;
+            else kept.Add(line);
+        }
+        return closing is null ? kept : null;
+    }
+
+    private static void AppendRegion(List<string> target, string begin, IEnumerable<string> body, string end)
+    {
+        if (target.Count > 0) target.Add("");
+        target.Add(begin);
+        target.AddRange(body);
+        target.Add(end);
+    }
+
+    private static bool IsMarker(string line, string marker) => line.Trim().Equals(marker, StringComparison.OrdinalIgnoreCase);
+    private static bool IsOption(string line) => OptionLine.IsMatch(line);
+    private static string Normalize(string line) => Regex.Replace(line.Trim(), @"\s+", " ");
+    private static List<string> SplitLines(string code) => [.. VbaSourceRules.SplitLines(code)];
+
+    private static int FirstProcedure(IReadOnlyList<string> lines)
+    {
+        for (var i = 0; i < lines.Count; i++)
+            if (ProcedureStart.IsMatch(lines[i])) return i;
+        return lines.Count;
+    }
+
+    private static IEnumerable<string> Names(IReadOnlyList<string> lines, Func<string, string?> extract) =>
+        lines.Select(extract).OfType<string>();
+
+    private static string? ProcedureNames(string line)
+    {
+        var match = ProcedureStart.Match(line);
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    private static string? DeclarationNamesOf(string line)
+    {
+        if (line.TrimStart().StartsWith('\'')) return null;
+        foreach (var regex in DeclarationNames)
+        {
+            var match = regex.Match(line);
+            if (match.Success) return match.Groups[1].Value;
+        }
+        return null;
+    }
+
+    private static List<string> TrimBlankEdges(List<string> lines)
+    {
+        var start = lines.FindIndex(l => !string.IsNullOrWhiteSpace(l));
+        if (start < 0) return [];
+        var end = lines.FindLastIndex(l => !string.IsNullOrWhiteSpace(l));
+        return lines.GetRange(start, end - start + 1);
+    }
+}
