@@ -15,7 +15,14 @@ internal static class LicensePackaging
 {
     private const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline;
     private static readonly Regex DefinesKey = new(@"^[ \t]*(?:Public[ \t]+)?Function[ \t]+Cfg_ProductKey\b", Options);
-    private static readonly Regex AutoOpen = new(@"^[ \t]*(?:(?:Public|Private)[ \t]+)?Sub[ \t]+Auto_Open\b", Options);
+    private static readonly Regex AutoOpen = new(@"^[ \t]*(?:(?:Public|Private|Friend)[ \t]+)?(?:Static[ \t]+)?Sub[ \t]+Auto_Open\b", Options);
+
+    /// <summary>A procedure only the licensing module should define: a leftover copy would clash or run instead.</summary>
+    private static readonly Regex LicensingProcedure = new(
+        @"^[ \t]*(?:(?:Public|Private|Friend)[ \t]+)?(?:Static[ \t]+)?(?:Function|Sub|Property[ \t]+(?:Get|Let|Set))[ \t]+(Cfg_ProductKey|License_\w+)\b", Options);
+
+    /// <summary>One element of the saved Cfg_ProtectedSheetNames array, as LicenseModuleConfigurator writes it.</summary>
+    private static readonly Regex ProtectedNameLine = new(@"^[ \t]*protectedNames\((\d+)\)[ \t]*=[ \t]*(.*?)[ \t]*$", Options);
 
     public static (VbaPackageComponentFile? Module, string? Error) FindLicenseModule(VbaPackage package)
     {
@@ -31,14 +38,23 @@ internal static class LicensePackaging
         };
     }
 
-    /// <summary>The product's own standard modules must not define Auto_Open: the licensing module's Auto_Open is the gate.</summary>
-    public static string? FindAutoOpenConflict(
+    /// <summary>
+    /// The product's own modules (outside what the package manages) must not define Auto_Open, which is the
+    /// licensing module's gate, nor Cfg_ProductKey or License_* (an old copy of the licensing module).
+    /// </summary>
+    public static string? FindForeignLicensingCode(
         IVbaWorkbookSession session, IReadOnlyList<VbaComponentInfo> components, IReadOnlyCollection<string> replaced)
     {
         var replacedNames = replaced.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var module in components.Where(c => c.Kind == VbaComponentKind.Standard && !replacedNames.Contains(c.Name)))
+        var modules = components.Where(c => c.Kind is VbaComponentKind.Standard or VbaComponentKind.Class && !replacedNames.Contains(c.Name));
+        foreach (var module in modules)
         {
-            if (AutoOpen.IsMatch(session.GetDocumentCode(module.Name)))
+            var code = session.GetDocumentCode(module.Name);
+            var licensing = LicensingProcedure.Match(code);
+            if (licensing.Success)
+                return $"Module {module.Name} của file không do tool-vba quản lý nhưng có thủ tục {licensing.Groups[1].Value} của module bản quyền " +
+                       "(có thể là một bản module bản quyền cũ). Hãy xóa module đó trong file gốc (Alt+F11) rồi thử lại.";
+            if (module.Kind == VbaComponentKind.Standard && AutoOpen.IsMatch(code))
                 return $"Module {module.Name} của file đã có thủ tục Auto_Open. Module bản quyền dùng Auto_Open để kiểm tra bản quyền khi mở file; " +
                        "hãy chuyển code đó sang Workbook_Open hoặc đổi tên thủ tục rồi thử lại.";
         }
@@ -81,18 +97,32 @@ internal static class LicensePackaging
         session.SetCustomProperty(GuideSheet.MarkerProperty, GuideSheet.Name);
     }
 
-    /// <summary>Checks the saved copy: product settings in the module, only the guide sheet visible. Null when all is right.</summary>
+    /// <summary>
+    /// Checks the saved copy against what was packaged: the guide is the first sheet and visible, every other sheet
+    /// is very hidden and is exactly the protected list, and the module carries the product, the version and that
+    /// same list. Null when all is right.
+    /// </summary>
     public static string? VerifySaved(IVbaWorkbookSession session, LicenseSetup setup)
     {
         var code = session.GetDocumentCode(setup.Module.Name);
         if (!code.Contains($"Cfg_ProductKey = \"{setup.Product.ProductKey}\"", StringComparison.Ordinal) ||
             !code.Contains($"Cfg_ProductVersion = \"{setup.Product.Version}\"", StringComparison.Ordinal))
             return "Module bản quyền trong file tạm chưa có mã sản phẩm và phiên bản.";
+        var expected = setup.Sheets.ProtectedNames;
+        var saved = VbaSourceRules.SplitLines(code).Select(l => ProtectedNameLine.Match(l)).Where(m => m.Success)
+            .Select(m => (Index: int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture), Literal: m.Groups[2].Value))
+            .ToList();
+        if (!saved.SequenceEqual(expected.Select((name, i) => (i, VbaStringLiteral.From(name)))))
+            return "Danh sách sheet bảo vệ trong module bản quyền đã lưu khác danh sách sheet đã ẩn.";
+
         var sheets = session.GetSheets();
-        var guide = sheets.FirstOrDefault(s => string.Equals(s.Name, GuideSheet.Name, StringComparison.OrdinalIgnoreCase));
-        if (guide is null || guide.Visibility != SheetVisibility.Visible)
-            return "Sheet hướng dẫn chưa được lưu hoặc đang bị ẩn.";
-        var exposed = sheets.FirstOrDefault(s => !ReferenceEquals(s, guide) && s.Visibility != SheetVisibility.VeryHidden);
-        return exposed is null ? null : $"Sheet \"{exposed.Name}\" chưa được ẩn trong file tạm.";
+        if (sheets.Count == 0 || !string.Equals(sheets[0].Name, GuideSheet.Name, StringComparison.OrdinalIgnoreCase) ||
+            sheets[0].Visibility != SheetVisibility.Visible)
+            return "Sheet \"Huong dan\" phải là sheet thứ nhất và đang hiện trong file tạm.";
+        var exposed = sheets.Skip(1).FirstOrDefault(s => s.Visibility != SheetVisibility.VeryHidden);
+        if (exposed is not null) return $"Sheet \"{exposed.Name}\" chưa được ẩn trong file tạm.";
+        return sheets.Skip(1).Select(s => s.Name).SequenceEqual(expected, StringComparer.Ordinal)
+            ? null
+            : "Các sheet trong file tạm khác danh sách sheet đã ẩn.";
     }
 }

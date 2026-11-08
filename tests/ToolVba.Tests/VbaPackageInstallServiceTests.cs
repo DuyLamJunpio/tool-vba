@@ -91,6 +91,68 @@ public sealed class VbaPackageInstallServiceTests : IDisposable
         Assert.Equal(0, host.SaveCount);
     }
 
+    public static TheoryData<string> SavedCopyFaults => ["guide moved", "sheet shown", "sheet added", "name dropped", "name changed"];
+
+    [Theory]
+    [MemberData(nameof(SavedCopyFaults))]
+    public async Task Writes_no_output_when_the_saved_copy_does_not_match_what_was_packaged(string fault)
+    {
+        var output = _temp.PathFor("out.xlsm");
+        var host = new FakeVbaWorkbookHost(Documents(), [new("Dữ liệu", false, SheetVisibility.Visible), new("Báo cáo", false, SheetVisibility.Visible)])
+        {
+            OnCommit = h => Corrupt(h, fault)
+        };
+
+        var result = await new VbaPackageInstallService(host).InstallAsync(Request(CreateXlsx("a.xlsx"), output));
+
+        Assert.False(result.Succeeded);
+        Assert.False(File.Exists(output));
+        AssertNoTemporaryFiles();
+    }
+
+    private static void Corrupt(FakeVbaWorkbookHost host, string fault)
+    {
+        var sheets = host.PersistedSheets;
+        var module = host.Persisted["modLicenseApiV1"];
+        switch (fault)
+        {
+            case "guide moved":
+                (sheets[0], sheets[1]) = (sheets[1], sheets[0]);
+                break;
+            case "sheet shown":
+                sheets[2] = sheets[2] with { Visibility = SheetVisibility.Hidden };
+                break;
+            case "sheet added":
+                sheets.Add(new("Mới", false, SheetVisibility.VeryHidden));
+                break;
+            case "name dropped":
+                host.Persisted["modLicenseApiV1"] = module with { Code = module.Code.Replace("    protectedNames(1) = ", "    ' protectedNames(1) = ") };
+                break;
+            case "name changed":
+                host.Persisted["modLicenseApiV1"] = module with { Code = module.Code.Replace("protectedNames(0) = \"D\"", "protectedNames(0) = \"X\"") };
+                break;
+        }
+    }
+
+    [Theory]
+    [InlineData("Public Function Cfg_ProductKey() As String\r\nEnd Function\r\n", "Cfg_ProductKey")]
+    [InlineData("Public Sub License_OnClose()\r\nEnd Sub\r\n", "License_OnClose")]
+    [InlineData("Private Function License_BeforeSave() As Boolean\r\nEnd Function\r\n", "License_BeforeSave")]
+    public async Task Stops_when_an_unmanaged_module_still_carries_licensing_code(string code, string procedure)
+    {
+        var host = new FakeVbaWorkbookHost([
+            .. Documents(),
+            new("modBanQuyenCu", VbaComponentKind.Standard, "Attribute VB_Name = \"modBanQuyenCu\"\r\n" + code)
+        ]);
+
+        var result = await new VbaPackageInstallService(host).InstallAsync(Request(CreateXlsm("a.xlsm"), _temp.PathFor("out.xlsm")));
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("modBanQuyenCu", result.Message);
+        Assert.Contains(procedure, result.Message);
+        Assert.Equal(0, host.SaveCount);
+    }
+
     [Fact]
     public async Task Stops_when_the_product_has_its_own_Auto_Open()
     {
@@ -459,11 +521,13 @@ internal sealed record FakeComponent(string Name, VbaComponentKind Kind, string 
 
 internal sealed class FakeVbaWorkbookHost(IEnumerable<FakeComponent> initial, IEnumerable<WorkbookSheetInfo>? sheets = null) : IVbaWorkbookHost
 {
-    public Dictionary<string, FakeComponent> Persisted { get; private set; } =
+    public Dictionary<string, FakeComponent> Persisted { get; set; } =
         initial.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
     public List<string> PersistedNames => Persisted.Values.Select(c => c.Name).ToList();
-    public Dictionary<string, string> PersistedProperties { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
-    public List<WorkbookSheetInfo> PersistedSheets { get; private set; } =
+    public Dictionary<string, string> PersistedProperties { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Runs after each save, so a test can make the saved copy differ from what was written.</summary>
+    public Action<FakeVbaWorkbookHost>? OnCommit { get; init; }
+    public List<WorkbookSheetInfo> PersistedSheets { get; set; } =
         sheets?.ToList() ?? [new("Sheet1", false, SheetVisibility.Visible)];
     public IReadOnlyList<string> GuideLines { get; private set; } = [];
     /// <summary>Cell A1 of sheets the test sets up; the guide sheet's A1 comes from its written lines.</summary>
@@ -587,6 +651,7 @@ internal sealed class FakeVbaWorkbookHost(IEnumerable<FakeComponent> initial, IE
             owner.PersistedProperties = new(_properties, StringComparer.OrdinalIgnoreCase);
             owner.PersistedSheets = [.. _sheets];
             owner.GuideLines = _guideLines;
+            owner.OnCommit?.Invoke(owner);
         }
 
         public void Dispose() { }

@@ -162,3 +162,10 @@ Cập nhật 08/11/2026, nhánh `feat/one-screen-auto-update`.
 3. Ghép sự kiện bản quyền (`Workbook_BeforeClose`, `Workbook_BeforeSave`, `Workbook_AfterSave`) vào thủ tục sẵn có của sản phẩm, thay vì dừng vì trùng tên.
 4. Tự thêm sheet hướng dẫn "Huong dan" và ẩn mọi sheet khác (`xlSheetVeryHidden`).
 5. Xóa zip/artifact phân phối cũ (sau 1–2 tuần).
+
+Để đợt sau (từ review ngày 08/11/2026, chủ dự án đồng ý hoãn):
+
+- Test cho ViewModel của app (`MainViewModel`, `ProductInputViewModel`); app hiện chưa có project test.
+- Thông báo đúng loại sheet: sheet macro Excel 4 và sheet hộp thoại đang bị báo là "chart sheet".
+- Câu khuyên khi Excel báo lỗi COM lúc thao tác sheet: hiện mọi lỗi đều nhận "đóng hết Excel rồi thử lại".
+- Từ chối nhầm theo hướng an toàn: `Exit Sub`, `End`, `GoTo`, `Resume` nằm trong chú thích cuối dòng hoặc trong chuỗi vẫn làm file bị từ chối.

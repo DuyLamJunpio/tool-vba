@@ -108,8 +108,8 @@ public sealed class VbaPackageInstallService(
         var components = NormalizeWorkbookModuleName(session);
         var (plan, planError) = VbaInstallPlan.Create(components, ManagedComponentList.Read(session), target.Package, target.SourceHadVbaProject);
         if (plan is null) return (null, planError);
-        var autoOpen = LicensePackaging.FindAutoOpenConflict(session, components, plan.ComponentsToRemove);
-        if (autoOpen is not null) return (null, autoOpen);
+        var foreign = LicensePackaging.FindForeignLicensingCode(session, components, plan.ComponentsToRemove);
+        if (foreign is not null) return (null, foreign);
         var (license, licenseError) = LicensePackaging.Prepare(session, target.LicenseModule, target.Product, target.Work.LicenseDirectory);
         if (license is null) return (null, licenseError);
         var (merges, mergeError) = MergeDocuments(session, plan);

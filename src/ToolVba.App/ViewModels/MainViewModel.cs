@@ -26,6 +26,8 @@ internal sealed class MainViewModel : ObservableObject
     private int _progressPercent;
     private string? _lastOutput;
     private IReadOnlyList<string> _warnings = [];
+    /// <summary>The status line shows the "Xong…" of the last run; it no longer applies once the file or product changes.</summary>
+    private bool _showsResult;
 
     public MainViewModel(Window owner, AppServices services)
     {
@@ -37,7 +39,7 @@ internal sealed class MainViewModel : ObservableObject
         Product = new ProductInputViewModel();
         BrowseCommand = new RelayCommand(Browse, () => IsIdle);
         CreateCommand = new RelayCommand(async () => await CreateAsync(), CanCreate);
-        ClearCommand = new RelayCommand(() => Workbook = null, () => IsIdle && HasFile);
+        ClearCommand = new RelayCommand(() => { Workbook = null; ClearResult(); }, () => IsIdle && HasFile);
         ChangeOutputFolderCommand = new RelayCommand(ChangeOutputFolder, () => IsIdle);
         ResetOutputFolderCommand = new RelayCommand(() => SetOutputDirectory(null), () => IsIdle && _outputDirectory is not null);
         OpenOutputCommand = new RelayCommand(OpenOutput, () => CanOpenOutput);
@@ -122,6 +124,7 @@ internal sealed class MainViewModel : ObservableObject
             return;
         }
         Workbook = new WorkbookItem(supported[0], OutputFor(supported[0]), _ => Workbook = null);
+        ClearResult();
         Status = all.Count > 1
             ? "Mỗi lần chỉ đóng gói một file cho một sản phẩm; đã lấy file đầu tiên."
             : "Nhập sản phẩm rồi bấm Tạo. File gốc được giữ nguyên.";
@@ -210,6 +213,15 @@ internal sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CanOpenOutput));
         Status = $"Xong! Đã tạo {item.OutputName} cho {product.ProductKey} {product.Version} (code VBA v{package.Version}). " +
                  "Mở thử file để kích hoạt rồi mới tải lên cửa hàng. File gốc được giữ nguyên.";
+        _showsResult = true;
+    }
+
+    private void ClearResult()
+    {
+        if (!_showsResult) return;
+        _showsResult = false;
+        Warnings = [];
+        Status = "Nhập sản phẩm rồi bấm Tạo. File gốc được giữ nguyên.";
     }
 
     private string OutputFor(string source) =>
@@ -217,6 +229,7 @@ internal sealed class MainViewModel : ObservableObject
 
     private void RefreshOutput()
     {
+        ClearResult();
         if (_workbook is { State: not WorkbookItemState.Working } item)
         {
             if (item.State == WorkbookItemState.Done) item.State = WorkbookItemState.Ready;
