@@ -77,7 +77,7 @@ public sealed class LicenseModuleConfiguratorTests
         Assert.DoesNotContain("Cfg_ProductKey = vbNullString", code, StringComparison.Ordinal);
         Assert.True(code!.All(char.IsAscii));
         // One sheet: the single Array() line becomes three lines; nothing else changes.
-        Assert.Equal(VbaSourceRules.SplitLines(source).Length + 2, VbaSourceRules.SplitLines(code).Length);
+        Assert.Equal(VbaSourceRules.SplitLines(source).Length + 2, VbaSourceRules.SplitLines(code!).Length);
     }
 
     [Theory]

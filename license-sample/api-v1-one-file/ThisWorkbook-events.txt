@@ -7,7 +7,7 @@ Private Sub Workbook_BeforeClose(Cancel As Boolean)
 End Sub
 
 Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)
-    If Not modLicenseApiV1.License_BeforeSave() Then Cancel = True
+    If Not modLicenseApiV1.License_BeforeSave() Then Cancel = True: Exit Sub
 End Sub
 
 Private Sub Workbook_AfterSave(ByVal Success As Boolean)

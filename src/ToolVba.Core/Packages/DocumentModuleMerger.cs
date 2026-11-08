@@ -14,6 +14,8 @@ public sealed record DocumentMergeResult(bool Succeeded, string? Code, IReadOnly
 /// Merges company code into a document module (ThisWorkbook or a sheet) that may already hold employee code.
 /// Company declarations go into a marked region after the existing declarations; company procedures go
 /// into a marked region at the end. Earlier managed regions are replaced, never duplicated.
+/// The licensing events (DEC-115) are the exception: when the product already handles one, the package's
+/// body goes at the top of that handler between hook markers.
 /// Name detection is a best-effort line scan: it covers the common forms that would otherwise cause an
 /// "Ambiguous name detected" compile error.
 /// </summary>
@@ -23,6 +25,8 @@ public static class DocumentModuleMerger
     public const string DeclarationsEnd = "'=== tool-vba END declarations ===";
     public const string CodeBegin = "'=== tool-vba BEGIN code (auto-managed, do not edit) ===";
     public const string CodeEnd = "'=== tool-vba END code ===";
+    public const string HookBegin = "'=== tool-vba BEGIN license hook (auto-managed, do not edit) ===";
+    public const string HookEnd = "'=== tool-vba END license hook ===";
 
     private const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
     private static readonly Regex ProcedureStart = new(
@@ -36,13 +40,24 @@ public static class DocumentModuleMerger
         new(@"^\s*(?:Dim|Public|Private|Global)\s+(?:WithEvents\s+)?(?!(?:Declare|Type|Enum|Event|Const|Sub|Function|Property|Static)\b)([A-Za-z_]\w*)", Options)
     ];
 
+    /// <summary>The licensing events whose body is put into the product's own handler (DEC-115).</summary>
+    private static readonly HashSet<string> HookableEvents = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Workbook_BeforeClose", "Workbook_BeforeSave", "Workbook_AfterSave"
+    };
+
+    /// <summary>A whole Sub signature on one line, with nothing after the parameter list.</summary>
+    private static readonly Regex SubSignature = new(
+        @"^\s*(?:(?:Public|Private|Friend)\s+)?(?:Static\s+)?Sub\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\([^()]*\))\s*$", Options);
+    private static readonly Regex EndSub = new(@"^\s*End\s+Sub\b", Options);
+
     public static DocumentMergeResult Merge(string existingCode, string packageCode)
     {
         var withoutRegions = RemoveManagedRegions(SplitLines(existingCode));
         if (withoutRegions is null)
             return DocumentMergeResult.Failure("Vùng code tool-vba trong module thiếu dòng END nên không thể thay an toàn. " +
                                                "Hãy mở Alt+F11, xóa vùng code tool-vba bị sửa dở rồi thử lại.");
-        var user = TrimBlankEdges(withoutRegions);
+        var userLines = TrimBlankEdges(withoutRegions);
         // A template that was itself produced by this tool still carries marker lines; they must not nest.
         var package = SplitLines(StripMarkers(packageCode))
             .Where(l => !l.TrimStart().StartsWith("Attribute VB_", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -50,7 +65,8 @@ public static class DocumentModuleMerger
         var packageSplit = FirstProcedure(package);
         var packageOptions = package.Take(packageSplit).Where(IsOption).ToList();
         var packageDeclarations = TrimBlankEdges(package.Take(packageSplit).Where(l => !IsOption(l)).ToList());
-        var packageProcedures = TrimBlankEdges(package.Skip(packageSplit).ToList());
+        var (user, packageProcedures, hookError) = ApplyLicenseHooks(userLines, TrimBlankEdges(package.Skip(packageSplit).ToList()));
+        if (hookError is not null) return DocumentMergeResult.Failure(hookError);
 
         var userSplit = FirstProcedure(user);
         var conflicts = Names(packageProcedures, ProcedureNames).Concat(Names(packageDeclarations, DeclarationNamesOf))
@@ -72,22 +88,59 @@ public static class DocumentModuleMerger
             if (result.Count > 0) result.Add("");
             result.AddRange(userProcedures);
         }
+        packageProcedures = TrimBlankEdges(packageProcedures);
         if (packageProcedures.Count > 0)
             AppendRegion(result, CodeBegin, packageProcedures, CodeEnd);
         return new(true, string.Join("\r\n", result) + "\r\n", [], null);
     }
 
     public static bool ContainsManagedCode(string code) =>
-        SplitLines(code).Any(l => IsMarker(l, DeclarationsBegin) || IsMarker(l, CodeBegin));
+        SplitLines(code).Any(l => IsMarker(l, DeclarationsBegin) || IsMarker(l, CodeBegin) || IsMarker(l, HookBegin));
 
     /// <summary>Removes only the marker lines, keeping the code between them.</summary>
     public static string StripMarkers(string code) =>
-        string.Join("\r\n", SplitLines(code).Where(l =>
-            !IsMarker(l, DeclarationsBegin) && !IsMarker(l, DeclarationsEnd) && !IsMarker(l, CodeBegin) && !IsMarker(l, CodeEnd)));
+        string.Join("\r\n", SplitLines(code).Where(l => !IsAnyMarker(l)));
 
     /// <summary>True when a module has nothing but blank lines, comments and Option statements.</summary>
     public static bool IsEffectivelyEmpty(string code) =>
         SplitLines(code).All(l => string.IsNullOrWhiteSpace(l) || IsOption(l) || l.TrimStart().StartsWith('\''));
+
+    /// <summary>
+    /// Moves the body of each licensing event the product already handles to the top of the product's
+    /// handler, and drops it from the package procedures. The two signatures must match (case, spacing
+    /// and scope aside); anything else stops with a message naming the handler.
+    /// </summary>
+    private static (List<string> User, List<string> PackageProcedures, string? Error) ApplyLicenseHooks(
+        List<string> user, List<string> packageProcedures)
+    {
+        var result = new List<string>(user);
+        var remaining = new List<string>(packageProcedures);
+        foreach (var name in Names(packageProcedures, ProcedureNames).Where(HookableEvents.Contains).ToList())
+        {
+            var userStart = result.FindIndex(l => string.Equals(ProcedureNames(l), name, StringComparison.OrdinalIgnoreCase));
+            if (userStart < 0) continue;
+            var packageStart = remaining.FindIndex(l => string.Equals(ProcedureNames(l), name, StringComparison.OrdinalIgnoreCase));
+            var packageEnd = remaining.FindIndex(packageStart + 1, l => EndSub.IsMatch(l));
+            var userSignature = NormalizedSignature(result[userStart]);
+            if (packageEnd < 0 || userSignature is null || userSignature != NormalizedSignature(remaining[packageStart]))
+                return ([], [], $"Thủ tục {name} trong file có chữ ký khác chữ ký chuẩn của Excel ({result[userStart].Trim()}) " +
+                                "nên không ghép được code bản quyền. Hãy sửa dòng khai báo cho giống chữ ký chuẩn (viết trên một dòng) rồi thử lại.");
+            var body = remaining.GetRange(packageStart + 1, packageEnd - packageStart - 1);
+            result.InsertRange(userStart + 1, [HookBegin, .. body, HookEnd]);
+            remaining.RemoveRange(packageStart, packageEnd - packageStart + 1);
+        }
+        return (result, remaining, null);
+    }
+
+    /// <summary>"name(parameters)" without scope, case or extra spaces; null when not a one-line Sub signature.</summary>
+    private static string? NormalizedSignature(string line)
+    {
+        var match = SubSignature.Match(line);
+        if (!match.Success) return null;
+        var parameters = Regex.Replace(match.Groups[2].Value, @"\s+", " ");
+        parameters = Regex.Replace(parameters, @"\s*([(),])\s*", "$1");
+        return (match.Groups[1].Value + parameters).ToLowerInvariant();
+    }
 
     /// <summary>
     /// Option statements of the package that the module still needs. Option Explicit is never required
@@ -119,7 +172,7 @@ public static class DocumentModuleMerger
         return match.Success ? Regex.Replace(match.Groups[1].Value, @"\s+", " ").ToLowerInvariant() : "";
     }
 
-    /// <summary>Removes earlier managed regions; null when a region has no END marker, so nothing is lost silently.</summary>
+    /// <summary>Removes earlier managed regions and hooks; null when one has no END marker, so nothing is lost silently.</summary>
     private static List<string>? RemoveManagedRegions(IEnumerable<string> lines)
     {
         var kept = new List<string>();
@@ -133,6 +186,7 @@ public static class DocumentModuleMerger
             }
             if (IsMarker(line, DeclarationsBegin)) closing = DeclarationsEnd;
             else if (IsMarker(line, CodeBegin)) closing = CodeEnd;
+            else if (IsMarker(line, HookBegin)) closing = HookEnd;
             else kept.Add(line);
         }
         return closing is null ? kept : null;
@@ -145,6 +199,10 @@ public static class DocumentModuleMerger
         target.AddRange(body);
         target.Add(end);
     }
+
+    private static bool IsAnyMarker(string line) =>
+        IsMarker(line, DeclarationsBegin) || IsMarker(line, DeclarationsEnd) || IsMarker(line, CodeBegin) ||
+        IsMarker(line, CodeEnd) || IsMarker(line, HookBegin) || IsMarker(line, HookEnd);
 
     private static bool IsMarker(string line, string marker) => line.Trim().Equals(marker, StringComparison.OrdinalIgnoreCase);
     private static bool IsOption(string line) => OptionLine.IsMatch(line);

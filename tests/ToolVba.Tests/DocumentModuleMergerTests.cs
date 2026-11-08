@@ -51,6 +51,126 @@ public sealed class DocumentModuleMergerTests
         Assert.DoesNotContain("mLoaded = True", second.Code);
     }
 
+    // DEC-115: the licensing events go at the top of the product's own handlers instead of refusing.
+    private const string LicenseEvents =
+        "Private Sub Workbook_BeforeClose(Cancel As Boolean)\r\n" +
+        "    modLicenseApiV1.License_OnClose\r\n" +
+        "End Sub\r\n" +
+        "\r\n" +
+        "Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)\r\n" +
+        "    If Not modLicenseApiV1.License_BeforeSave() Then Cancel = True: Exit Sub\r\n" +
+        "End Sub\r\n" +
+        "\r\n" +
+        "Private Sub Workbook_AfterSave(ByVal Success As Boolean)\r\n" +
+        "    modLicenseApiV1.License_AfterSave\r\n" +
+        "End Sub\r\n";
+
+    private const string ProductWithSaveHandler =
+        "Option Explicit\r\n" +
+        "\r\n" +
+        "Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)\r\n" +
+        "    Sheet1.Range(\"A1\").Value = Now\r\n" +
+        "End Sub\r\n";
+
+    [Fact]
+    public void Puts_licensing_calls_at_the_top_of_an_existing_event_handler()
+    {
+        var result = DocumentModuleMerger.Merge(ProductWithSaveHandler, LicenseEvents);
+
+        Assert.True(result.Succeeded, result.Error);
+        var lines = result.Code!.Split("\r\n").ToList();
+        var signature = lines.IndexOf("Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)");
+        Assert.Equal(DocumentModuleMerger.HookBegin, lines[signature + 1]);
+        Assert.Equal("    If Not modLicenseApiV1.License_BeforeSave() Then Cancel = True: Exit Sub", lines[signature + 2]);
+        Assert.Equal(DocumentModuleMerger.HookEnd, lines[signature + 3]);
+        Assert.Equal("    Sheet1.Range(\"A1\").Value = Now", lines[signature + 4]);
+        // The product's handler is the only one; the other two stay in the managed region.
+        Assert.Single(lines, l => l.Contains("Sub Workbook_BeforeSave"));
+        var codeBegin = lines.IndexOf(DocumentModuleMerger.CodeBegin);
+        Assert.True(codeBegin > signature);
+        Assert.True(lines.IndexOf("Private Sub Workbook_BeforeClose(Cancel As Boolean)") > codeBegin);
+        Assert.True(lines.IndexOf("Private Sub Workbook_AfterSave(ByVal Success As Boolean)") > codeBegin);
+    }
+
+    [Fact]
+    public void Packaging_again_replaces_the_calls_instead_of_adding_them_twice()
+    {
+        var first = DocumentModuleMerger.Merge(ProductWithSaveHandler, LicenseEvents).Code!;
+
+        var second = DocumentModuleMerger.Merge(first, LicenseEvents);
+
+        Assert.True(second.Succeeded, second.Error);
+        Assert.Equal(first, second.Code);
+    }
+
+    [Fact]
+    public void Merges_into_all_three_handlers_and_keeps_each_handler_body()
+    {
+        const string product =
+            "Private Sub Workbook_BeforeClose(Cancel As Boolean)\r\n    SaveSetting \"a\", \"b\", \"c\", \"d\"\r\nEnd Sub\r\n" +
+            "Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)\r\n    DoEvents\r\nEnd Sub\r\n" +
+            "Private Sub Workbook_AfterSave(ByVal Success As Boolean)\r\n    Beep\r\nEnd Sub\r\n";
+
+        var result = DocumentModuleMerger.Merge(product, LicenseEvents);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(3, result.Code!.Split("\r\n").Count(l => l == DocumentModuleMerger.HookBegin));
+        Assert.DoesNotContain(DocumentModuleMerger.CodeBegin, result.Code);
+        Assert.Contains("    SaveSetting \"a\", \"b\", \"c\", \"d\"", result.Code);
+        Assert.Contains("    DoEvents", result.Code);
+        Assert.Contains("    Beep", result.Code);
+    }
+
+    [Theory]
+    [InlineData("Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Huy As Boolean)")]
+    [InlineData("Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, _\r\n    Cancel As Boolean)")]
+    [InlineData("Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean) ' mine")]
+    public void Stops_with_a_clear_message_when_the_handler_signature_is_unusual(string signature)
+    {
+        var product = $"{signature}\r\n    DoEvents\r\nEnd Sub\r\n";
+
+        var result = DocumentModuleMerger.Merge(product, LicenseEvents);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("Workbook_BeforeSave", result.Error);
+        Assert.Contains("chữ ký", result.Error);
+    }
+
+    [Fact]
+    public void Accepts_the_same_signature_written_with_other_spacing_case_or_scope()
+    {
+        const string product =
+            "Sub workbook_beforesave(ByVal   SaveAsUI As Boolean,Cancel As Boolean)\r\n    DoEvents\r\nEnd Sub\r\n";
+
+        var result = DocumentModuleMerger.Merge(product, LicenseEvents);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Contains(DocumentModuleMerger.HookBegin, result.Code);
+    }
+
+    [Fact]
+    public void Refuses_a_hook_without_its_end_marker()
+    {
+        var broken = DocumentModuleMerger.Merge(ProductWithSaveHandler, LicenseEvents).Code!
+            .Replace(DocumentModuleMerger.HookEnd + "\r\n", "");
+
+        var result = DocumentModuleMerger.Merge(broken, LicenseEvents);
+
+        Assert.False(result.Succeeded);
+    }
+
+    [Fact]
+    public void Still_refuses_other_procedures_that_exist_in_both()
+    {
+        const string product = "Private Sub Workbook_AfterSave(ByVal Success As Boolean)\r\nEnd Sub\r\nPublic Sub Helper()\r\nEnd Sub\r\n";
+        var package = LicenseEvents + "Public Sub Helper()\r\nEnd Sub\r\n";
+
+        var result = DocumentModuleMerger.Merge(product, package);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(["Helper"], result.ConflictingNames);
+    }
+
     [Fact]
     public void Reports_procedure_that_already_exists_outside_managed_region()
     {
