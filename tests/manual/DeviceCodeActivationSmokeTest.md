@@ -1,19 +1,19 @@
 # Test case: kích hoạt và phục hồi cache Excel
 
-Áp dụng cho `modLicenseApiV1.bas` trong mẫu này. Tổng **44 ca thủ công**; bộ mock **64 ca**, bộ hồi quy có chữ ký **57 ca**. VBA mới chưa Compile/chạy trong Excel. Dùng workbook/tài khoản thử nghiệm; không ghi/chụp token, fingerprint, private key hoặc device_code. Chỉ ghi tên ca, mã lỗi và kết quả.
+Áp dụng cho `license-sample/api-v1-one-file/modLicenseApiV1.bas`. Tổng **44 ca thủ công**; bộ mock **64 ca**, bộ hồi quy có chữ ký **57 ca**. Ngày 08/11/2026: mock 64/64 đạt trong Excel thật và kích hoạt thật sản phẩm thử `test-01` trên `shop.sunprime.vn` đạt. Dùng workbook/tài khoản thử nghiệm; không ghi/chụp token, fingerprint, private key hoặc device_code. Chỉ ghi tên ca, mã lỗi và kết quả.
 
-Các route đã có trong source API local; trạng thái triển khai HTTPS/Store và các ca đầu cuối cần xác nhận riêng. “Cần môi trường” không có nghĩa là chưa có code API.
+API chạy tại `https://shop.sunprime.vn/api/v1`. “Cần môi trường” nghĩa là cần API/Store thật hoặc VM, không phải chưa có code API. Hướng dẫn module: [README](../../license-sample/api-v1-one-file/README.md).
 
 ## Điều kiện
 
 - Import module vào workbook `.xlsm` thử nghiệm riêng, không import cùng module cũ. Cấu hình đúng public key/`kid`, product/version và URL HTTPS nếu cần gọi API thật.
 - SHA-256 khớp manifest; Debug → Compile VBAProject không báo lỗi. Dùng profile/VM thử nghiệm riêng cho các ca xóa cache thật.
-- Cache là ciphertext DPAPI trong đúng CACHE_APP/CACHE_SECTION của mẫu; không xóa cache khách hàng thật để chuẩn bị thử.
-- Chủ workbook tạo sheet hướng dẫn visible riêng, cấu hình tên sheet premium và ghép `ThisWorkbook-events.txt` vào sự kiện hiện có. Lưu bản thử/phân phối với premium very hidden. Các ca thay giờ/ổ hệ thống dùng VM riêng.
-- Hồi quy có chữ ký dùng token do bộ ký API local tạo với claim license/device/JTI giả; HTTP/cache/UI là stub. Kết quả tại [RELEASE-CHECKS.md](../../license-sample/api-v1-one-file/RELEASE-CHECKS.md).
+- Cache là ciphertext DPAPI trong mục `Activation_<productKey>` của sản phẩm đang thử; không xóa cache khách hàng thật để chuẩn bị thử.
+- Workbook có sheet hướng dẫn "Huong dan" visible; mọi sheet khác nằm trong `Cfg_ProtectedSheetNames`. Ghép `ThisWorkbook-events.txt` vào sự kiện hiện có. Lưu bản thử/phân phối với các sheet đó very hidden. Các ca thay giờ/ổ hệ thống dùng VM riêng.
+- Hồi quy có chữ ký dùng token do bộ ký API local tạo với claim license/device/JTI giả; HTTP/cache/UI là stub. Cách chạy: [Kiểm tra trước phát hành](../../license-sample/api-v1-one-file/README.md#kiểm-tra-trước-phát-hành).
 
 | ID | Tình huống / thao tác | Kết quả mong đợi | Cách kiểm tra |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | DC-01 | Mẫu chưa cấu hình; mở rồi OK/X trên hướng dẫn | Chỉ workbook này đóng, không lưu; workbook khác và Excel vẫn mở | Excel thật |
 | DC-02 | Không bật macro | Auto_Open không chạy; ghi nhận giới hạn, không báo nhầm là đã khóa file | Excel thật |
 | DC-03 | Chưa có cache, cấu hình đủ; chọn No/X ở mã thiết bị | Không redeem, không lưu token mới, đóng riêng workbook | Cần môi trường |
@@ -61,7 +61,7 @@ Các route đã có trong source API local; trạng thái triển khai HTTPS/Sto
 
 ## Chạy nhanh
 
-1. Chạy `powershell -NoProfile -File .\contract-check.ps1` tại thư mục mẫu.
+1. Chạy `powershell -NoProfile -File .\contract-check.ps1` tại `license-sample/api-v1-one-file`.
 2. Import `modLicenseApiV1.bas` vào workbook thử nghiệm, Compile, chạy mock 64/64.
 3. Chạy `node .\tests\build-excel-regression.mjs D:\Code\digital-license-api`, import `TestResults/modLicenseRegression.bas` vào workbook thử nghiệm, Compile, chạy hồi quy 57/57. Không nhập module test vào file khách hàng.
 4. Kiểm tra đầu cuối trên URL HTTPS phát hành, đặc biệt DC-21/22/23, DC-26/27/28/29 và DC-31–44. Ghi kết quả an toàn, không ghi token hoặc định danh máy.
