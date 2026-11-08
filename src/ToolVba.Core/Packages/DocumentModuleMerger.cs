@@ -51,6 +51,23 @@ public static class DocumentModuleMerger
         @"^\s*(?:(?:Public|Private|Friend)\s+)?(?:Static\s+)?Sub\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\([^()]*\))\s*$", Options);
     private static readonly Regex EndSub = new(@"^\s*End\s+Sub\b", Options);
 
+    /// <summary>
+    /// A hooked body runs inside the product's handler: a local declaration could clash with the product's
+    /// locals, and an error handler, label or jump would change how the product's own lines run.
+    /// </summary>
+    private static readonly Regex UnsafeHookLine = new(
+        @"^\s*(?:(?:Dim|Static|ReDim|Const)\b|On\s+Error\b|[A-Za-z_]\w*:\s*$)|\b(?:GoTo|Resume)\b", Options);
+
+    /// <summary>
+    /// The close call goes last (owner, 08/11/2026): it runs only when the product did not cancel, so a product
+    /// that asks "close?" and is answered No keeps its sheets and access.
+    /// </summary>
+    private const string CloseEvent = "Workbook_BeforeClose";
+
+    /// <summary>A statement that leaves the handler before its last line: Exit Sub/Function or a bare End.</summary>
+    private static readonly Regex EarlyExit = new(
+        @"\bExit\s+(?:Sub|Function)\b|(?:^|:|\bThen\b|\bElse\b)\s*End\s*(?:'.*)?$", Options);
+
     public static DocumentMergeResult Merge(string existingCode, string packageCode)
     {
         var withoutRegions = RemoveManagedRegions(SplitLines(existingCode));
@@ -126,11 +143,44 @@ public static class DocumentModuleMerger
                 return ([], [], $"Thủ tục {name} trong file có chữ ký khác chữ ký chuẩn của Excel ({result[userStart].Trim()}) " +
                                 "nên không ghép được code bản quyền. Hãy sửa dòng khai báo cho giống chữ ký chuẩn (viết trên một dòng) rồi thử lại.");
             var body = remaining.GetRange(packageStart + 1, packageEnd - packageStart - 1);
-            result.InsertRange(userStart + 1, [HookBegin, .. body, HookEnd]);
+            if (body.Any(l => !IsComment(l) && UnsafeHookLine.IsMatch(l)))
+                return ([], [], $"Code sự kiện {name} của gói có khai báo, nhãn hoặc xử lý lỗi nên không ghép vào thủ tục có sẵn của file được. " +
+                                "Thân sự kiện bản quyền chỉ được gồm lời gọi module bản quyền; hãy sửa file mẫu rồi xuất bản lại gói.");
+            var insertError = InsertHook(result, userStart, name, body);
+            if (insertError is not null) return ([], [], insertError);
             remaining.RemoveRange(packageStart, packageEnd - packageStart + 1);
         }
         return (result, remaining, null);
     }
+
+    /// <summary>At the top of the handler, except BeforeClose: last, and only when the product did not cancel.</summary>
+    private static string? InsertHook(List<string> user, int userStart, string name, List<string> body)
+    {
+        if (!string.Equals(name, CloseEvent, StringComparison.OrdinalIgnoreCase))
+        {
+            user.InsertRange(userStart + 1, [HookBegin, .. body, HookEnd]);
+            return null;
+        }
+        var userEnd = user.FindIndex(userStart + 1, l => EndSub.IsMatch(l));
+        if (userEnd < 0)
+            return $"Thủ tục {name} trong file thiếu dòng End Sub nên không ghép được code bản quyền.";
+        if (user.GetRange(userStart + 1, userEnd - userStart - 1).Any(l => !IsComment(l) && EarlyExit.IsMatch(l)))
+            return $"Thủ tục {name} trong file có Exit Sub, Exit Function hoặc End, nên lời gọi bản quyền đặt ở cuối thủ tục có thể không chạy. " +
+                   "Hãy viết lại thủ tục không dùng các lệnh này (ví dụ dùng If … Else … End If) rồi thử lại.";
+        user.InsertRange(userEnd, [HookBegin, .. GuardedByCancel(body), HookEnd]);
+        return null;
+    }
+
+    /// <summary>"If Not Cancel Then …" on one line for one statement, an If block otherwise.</summary>
+    private static List<string> GuardedByCancel(List<string> body)
+    {
+        // A comment is no statement: "If Not Cancel Then ' note" would open a block If without End If.
+        var statements = body.Where(l => !string.IsNullOrWhiteSpace(l) && !IsComment(l)).Select(l => l.Trim()).ToList();
+        if (statements.Count == 1) return ["    If Not Cancel Then " + statements[0]];
+        return ["    If Not Cancel Then", .. statements.Select(s => "        " + s), "    End If"];
+    }
+
+    private static bool IsComment(string line) => line.TrimStart().StartsWith('\'');
 
     /// <summary>"name(parameters)" without scope, case or extra spaces; null when not a one-line Sub signature.</summary>
     private static string? NormalizedSignature(string line)

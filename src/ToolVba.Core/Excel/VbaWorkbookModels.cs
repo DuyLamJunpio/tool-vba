@@ -31,4 +31,21 @@ public interface IVbaWorkbookSession : IDisposable
     void DeleteCustomProperty(string name);
     void Save();
     void SaveAsMacroEnabled(string outputPath);
+
+    /// <summary>Every sheet of the workbook in tab order, worksheets and chart sheets.</summary>
+    IReadOnlyList<WorkbookSheetInfo> GetSheets();
+
+    /// <summary>True when Review &gt; Protect Workbook locks the structure (sheets cannot be added or hidden).</summary>
+    bool IsStructureProtected();
+
+    /// <summary>
+    /// Puts <paramref name="lines"/> in column A of the worksheet <paramref name="name"/> (added first when
+    /// <paramref name="create"/>), makes it the first, visible and active sheet.
+    /// </summary>
+    void WriteGuideSheet(string name, IReadOnlyList<string> lines, bool create);
+
+    void SetSheetVisibility(string name, SheetVisibility visibility);
+
+    /// <summary>The text of one cell (for example "A1") of a sheet; "" when empty.</summary>
+    string ReadCell(string sheetName, string address);
 }

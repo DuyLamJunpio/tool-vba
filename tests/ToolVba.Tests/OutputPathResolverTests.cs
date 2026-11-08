@@ -4,45 +4,37 @@ namespace ToolVba.Tests;
 
 public sealed class OutputPathResolverTests
 {
+    private static readonly LicenseProduct Product = new("test-01", "1.0.0");
+
     [Fact]
-    public void Places_macro_enabled_output_next_to_source()
+    public void Names_the_output_after_the_product_and_version_next_to_the_source()
     {
         using var temp = new TestDirectory();
         var input = temp.PathFor("Báo cáo tháng.xlsx");
         File.WriteAllText(input, "");
 
-        Assert.Equal(temp.PathFor("Báo cáo tháng_vba.xlsm"), OutputPathResolver.Resolve(input));
+        Assert.Equal(temp.PathFor("test-01_1.0.0_ban-quyen.xlsm"), OutputPathResolver.Resolve(input, Product));
     }
 
     [Fact]
-    public void Numbers_output_when_name_is_taken_and_never_returns_the_source()
+    public void Numbers_output_when_name_is_taken()
     {
         using var temp = new TestDirectory();
-        var input = temp.PathFor("Report_vba.xlsm");
+        var input = temp.PathFor("source.xlsm");
+        File.WriteAllText(temp.PathFor("test-01_1.0.0_ban-quyen.xlsm"), "");
+        File.WriteAllText(temp.PathFor("test-01_1.0.0_ban-quyen (2).xlsm"), "");
+
+        Assert.Equal(temp.PathFor("test-01_1.0.0_ban-quyen (3).xlsm"), OutputPathResolver.Resolve(input, Product));
+    }
+
+    [Fact]
+    public void Never_returns_the_source_when_it_already_has_the_packaged_name()
+    {
+        using var temp = new TestDirectory();
+        var input = temp.PathFor("test-01_1.0.0_ban-quyen.xlsm");
         File.WriteAllText(input, "");
-        File.WriteAllText(temp.PathFor("Report_vba (2).xlsm"), "");
 
-        var output = OutputPathResolver.Resolve(input);
-
-        Assert.Equal(temp.PathFor("Report_vba (3).xlsm"), output);
-    }
-
-    [Fact]
-    public void Skips_names_reserved_by_other_files_in_the_same_batch()
-    {
-        using var temp = new TestDirectory();
-        var input = temp.PathFor("a.xlsm");
-        var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { temp.PathFor("a_vba.xlsm") };
-
-        Assert.Equal(temp.PathFor("a_vba (2).xlsm"), OutputPathResolver.Resolve(input, reserved: reserved));
-    }
-
-    [Fact]
-    public void Keeps_numbers_in_parentheses_that_belong_to_the_original_name()
-    {
-        using var temp = new TestDirectory();
-
-        Assert.Equal(temp.PathFor("Report (2024)_vba.xlsm"), OutputPathResolver.Resolve(temp.PathFor("Report (2024).xlsx")));
+        Assert.Equal(temp.PathFor("test-01_1.0.0_ban-quyen (2).xlsm"), OutputPathResolver.Resolve(input, Product));
     }
 
     [Fact]
@@ -52,6 +44,6 @@ public sealed class OutputPathResolverTests
         var input = temp.PathFor("a.xlsx");
         var other = Directory.CreateDirectory(temp.PathFor("out")).FullName;
 
-        Assert.Equal(Path.Combine(other, "a_vba.xlsm"), OutputPathResolver.Resolve(input, other));
+        Assert.Equal(Path.Combine(other, "test-01_1.0.0_ban-quyen.xlsm"), OutputPathResolver.Resolve(input, Product, other));
     }
 }

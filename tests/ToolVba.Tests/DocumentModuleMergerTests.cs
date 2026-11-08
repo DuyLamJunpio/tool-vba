@@ -160,6 +160,153 @@ public sealed class DocumentModuleMergerTests
     }
 
     [Fact]
+    public void Hook_only_output_still_counts_as_managed_code_and_merges_again_unchanged()
+    {
+        const string product =
+            "Option Explicit\r\nPrivate mUser As Long\r\n\r\nPublic Sub Helper()\r\nEnd Sub\r\n" +
+            "Private Sub Workbook_BeforeClose(Cancel As Boolean)\r\n    mUser = 1\r\nEnd Sub\r\n" +
+            "Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)\r\n    mUser = 2\r\nEnd Sub\r\n" +
+            "Private Sub Workbook_AfterSave(ByVal Success As Boolean)\r\n    mUser = 3\r\nEnd Sub\r\n";
+
+        var first = DocumentModuleMerger.Merge(product, LicenseEvents);
+        var second = DocumentModuleMerger.Merge(first.Code!, LicenseEvents);
+
+        Assert.True(first.Succeeded, first.Error);
+        // VerifySaved relies on this when every licensing event went into a product handler.
+        Assert.True(DocumentModuleMerger.ContainsManagedCode(first.Code!));
+        Assert.Equal(first.Code, second.Code);
+    }
+
+    [Fact]
+    public void Merges_the_shipped_licensing_events_into_existing_handlers()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "ToolVba.sln")))
+            directory = directory.Parent;
+        var events = File.ReadAllText(Path.Combine(directory!.FullName, "license-sample", "api-v1-one-file", "ThisWorkbook-events.txt"));
+
+        var result = DocumentModuleMerger.Merge(ProductWithSaveHandler, events);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Contains("    If Not modLicenseApiV1.License_BeforeSave() Then Cancel = True: Exit Sub", result.Code);
+    }
+
+    [Theory]
+    [InlineData("    Dim done As Boolean")]
+    [InlineData("    On Error Resume Next")]
+    [InlineData("    GoTo Finish")]
+    [InlineData("Finish:")]
+    public void Refuses_a_package_event_body_that_would_change_the_product_handler(string line)
+    {
+        var package = LicenseEvents.Replace("    modLicenseApiV1.License_OnClose\r\n", $"{line}\r\n    modLicenseApiV1.License_OnClose\r\n");
+        const string product = "Private Sub Workbook_BeforeClose(Cancel As Boolean)\r\n    DoEvents\r\nEnd Sub\r\n";
+
+        var result = DocumentModuleMerger.Merge(product, package);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("Workbook_BeforeClose", result.Error);
+    }
+
+    // Owner, 08/11/2026: in BeforeClose the licensing call goes LAST and only when the product did not cancel
+    // (a product asking "close?" and the user answering No must keep its sheets and access).
+    private const string ProductWithCloseHandler =
+        "Private Sub Workbook_BeforeClose(Cancel As Boolean)\r\n" +
+        "    If MsgBox(\"Ban chac chan muon dong?\", vbYesNo) = vbNo Then Cancel = True\r\n" +
+        "End Sub\r\n";
+
+    [Fact]
+    public void Puts_the_close_call_last_and_only_when_the_product_did_not_cancel()
+    {
+        var result = DocumentModuleMerger.Merge(ProductWithCloseHandler, LicenseEvents);
+
+        Assert.True(result.Succeeded, result.Error);
+        var lines = result.Code!.Split("\r\n").ToList();
+        var signature = lines.IndexOf("Private Sub Workbook_BeforeClose(Cancel As Boolean)");
+        Assert.Equal("    If MsgBox(\"Ban chac chan muon dong?\", vbYesNo) = vbNo Then Cancel = True", lines[signature + 1]);
+        Assert.Equal(DocumentModuleMerger.HookBegin, lines[signature + 2]);
+        Assert.Equal("    If Not Cancel Then modLicenseApiV1.License_OnClose", lines[signature + 3]);
+        Assert.Equal(DocumentModuleMerger.HookEnd, lines[signature + 4]);
+        Assert.Equal("End Sub", lines[signature + 5]);
+    }
+
+    [Fact]
+    public void Wraps_a_close_body_of_several_lines_in_one_if_block()
+    {
+        var package = LicenseEvents.Replace("    modLicenseApiV1.License_OnClose\r\n", "    modLicenseApiV1.License_OnClose\r\n    modLicenseApiV1.License_OnClose\r\n");
+
+        var result = DocumentModuleMerger.Merge(ProductWithCloseHandler, package);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Contains("    If Not Cancel Then\r\n        modLicenseApiV1.License_OnClose\r\n        modLicenseApiV1.License_OnClose\r\n    End If\r\n", result.Code);
+    }
+
+    [Fact]
+    public void Does_not_count_a_comment_as_the_one_close_statement()
+    {
+        // "If Not Cancel Then ' note" would be a block If without End If.
+        var package = LicenseEvents.Replace("    modLicenseApiV1.License_OnClose\r\n", "    ' note\r\n    modLicenseApiV1.License_OnClose\r\n");
+
+        var result = DocumentModuleMerger.Merge(ProductWithCloseHandler, package);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Contains("    If Not Cancel Then modLicenseApiV1.License_OnClose\r\n", result.Code);
+        Assert.DoesNotContain("If Not Cancel Then '", result.Code);
+    }
+
+    [Fact]
+    public void Packaging_again_keeps_a_single_close_call_at_the_end()
+    {
+        var first = DocumentModuleMerger.Merge(ProductWithCloseHandler, LicenseEvents).Code!;
+
+        var second = DocumentModuleMerger.Merge(first, LicenseEvents);
+
+        Assert.True(second.Succeeded, second.Error);
+        Assert.Equal(first, second.Code);
+    }
+
+    [Theory]
+    [InlineData("    If Cancel Then Exit Sub")]
+    [InlineData("    Exit Sub")]
+    [InlineData("    Exit Function")]
+    [InlineData("    End")]
+    [InlineData("    If ThisWorkbook.Saved Then End")]
+    [InlineData("    x = 1: End")]
+    public void Refuses_a_close_handler_that_can_leave_before_the_licensing_call(string line)
+    {
+        var product = $"Private Sub Workbook_BeforeClose(Cancel As Boolean)\r\n{line}\r\n    DoEvents\r\nEnd Sub\r\n";
+
+        var result = DocumentModuleMerger.Merge(product, LicenseEvents);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("Workbook_BeforeClose", result.Error);
+        Assert.Contains("Exit Sub", result.Error);
+    }
+
+    [Theory]
+    [InlineData("    If Cancel Then\r\n        DoEvents\r\n    End If")]
+    [InlineData("    With ThisWorkbook\r\n        .Saved = True\r\n    End With")]
+    [InlineData("    ' Exit Sub is not used here")]
+    [InlineData("    MsgBox \"End\"")]
+    public void Accepts_block_endings_comments_and_strings_in_a_close_handler(string lines)
+    {
+        var product = $"Private Sub Workbook_BeforeClose(Cancel As Boolean)\r\n{lines}\r\nEnd Sub\r\n";
+
+        var result = DocumentModuleMerger.Merge(product, LicenseEvents);
+
+        Assert.True(result.Succeeded, result.Error);
+    }
+
+    [Fact]
+    public void Exit_sub_in_a_save_handler_is_allowed_because_its_call_runs_first()
+    {
+        var product = "Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)\r\n    If SaveAsUI Then Exit Sub\r\nEnd Sub\r\n";
+
+        var result = DocumentModuleMerger.Merge(product, LicenseEvents);
+
+        Assert.True(result.Succeeded, result.Error);
+    }
+
+    [Fact]
     public void Still_refuses_other_procedures_that_exist_in_both()
     {
         const string product = "Private Sub Workbook_AfterSave(ByVal Success As Boolean)\r\nEnd Sub\r\nPublic Sub Helper()\r\nEnd Sub\r\n";

@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
@@ -9,13 +8,19 @@ using ToolVba.Core;
 
 namespace ToolVba.App.ViewModels;
 
-/// <summary>Single screen: drop Excel files, press Create, the company VBA package is pasted into copies.</summary>
+/// <summary>
+/// Single screen (DEC-115): one Excel file and one store product per run. Pressing Create packages the
+/// licensing module, filled for that product, into a copy named &lt;productKey&gt;_&lt;version&gt;_ban-quyen.xlsm.
+/// </summary>
 internal sealed class MainViewModel : ObservableObject
 {
+    private const string NoProductOutput = "(nhập sản phẩm để xem tên file)";
+
     private readonly Window _owner;
     private readonly AppServices _services;
     private string? _outputDirectory;
-    private string _status = "Kéo thả file Excel vào cửa sổ này, rồi bấm Tạo.";
+    private WorkbookItem? _workbook;
+    private string _status = "Kéo thả một file Excel vào cửa sổ này, nhập sản phẩm rồi bấm Tạo.";
     private bool _hasError;
     private bool _isWorking;
     private int _progressPercent;
@@ -29,14 +34,15 @@ internal sealed class MainViewModel : ObservableObject
         Package = new VbaPackageStatusViewModel(services.Packages, services.ConfigurationError);
         Update = new AppUpdateViewModel(services.Updater, () => IsWorking);
         Trust = new TrustBannerViewModel(services.Trust, owner);
+        Product = new ProductInputViewModel();
         BrowseCommand = new RelayCommand(Browse, () => IsIdle);
         CreateCommand = new RelayCommand(async () => await CreateAsync(), CanCreate);
-        ClearCommand = new RelayCommand(Files.Clear, () => IsIdle && HasFiles);
+        ClearCommand = new RelayCommand(() => Workbook = null, () => IsIdle && HasFile);
         ChangeOutputFolderCommand = new RelayCommand(ChangeOutputFolder, () => IsIdle);
         ResetOutputFolderCommand = new RelayCommand(() => SetOutputDirectory(null), () => IsIdle && _outputDirectory is not null);
         OpenOutputCommand = new RelayCommand(OpenOutput, () => CanOpenOutput);
         OpenFolderCommand = new RelayCommand(OpenFolder, () => CanOpenOutput);
-        Files.CollectionChanged += (_, _) => { OnPropertyChanged(nameof(HasFiles)); OnPropertyChanged(nameof(CreateButtonText)); RaiseCommands(); };
+        Product.ProductChanged += (_, _) => { RefreshOutput(); RaiseCommands(); };
         Package.PropertyChanged += (_, _) => RaiseCommands();
         Update.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(AppUpdateViewModel.IsDownloading)) RaiseCommands(); };
     }
@@ -47,7 +53,7 @@ internal sealed class MainViewModel : ObservableObject
     public VbaPackageStatusViewModel Package { get; }
     public AppUpdateViewModel Update { get; }
     public TrustBannerViewModel Trust { get; }
-    public ObservableCollection<WorkbookItem> Files { get; } = [];
+    public ProductInputViewModel Product { get; }
 
     public ICommand BrowseCommand { get; }
     public ICommand CreateCommand { get; }
@@ -57,17 +63,27 @@ internal sealed class MainViewModel : ObservableObject
     public ICommand OpenOutputCommand { get; }
     public ICommand OpenFolderCommand { get; }
 
-    public string WindowTitle => $"Đóng gói VBA — phiên bản {AppConfig.AppVersionText}";
-    public bool HasFiles => Files.Count > 0;
+    public string WindowTitle => $"Đóng gói bản quyền — phiên bản {AppConfig.AppVersionText}";
+    public bool HasFile => _workbook is not null;
     public string OutputFolderText => _outputDirectory ?? "Lưu cạnh file gốc";
     public bool HasCustomOutputFolder => _outputDirectory is not null;
-    public string CreateButtonText => Files.Count > 1 ? $"Tạo {Files.Count} file có VBA" : "Tạo file có VBA";
     public string Status { get => _status; private set => Set(ref _status, value); }
     public bool HasError { get => _hasError; private set => Set(ref _hasError, value); }
     public int ProgressPercent { get => _progressPercent; private set => Set(ref _progressPercent, value); }
     public IReadOnlyList<string> Warnings { get => _warnings; private set => Set(ref _warnings, value); }
     public bool IsIdle => !IsWorking;
     public bool CanOpenOutput => IsIdle && _lastOutput is not null && File.Exists(_lastOutput);
+
+    public WorkbookItem? Workbook
+    {
+        get => _workbook;
+        private set
+        {
+            if (!Set(ref _workbook, value)) return;
+            OnPropertyChanged(nameof(HasFile));
+            RaiseCommands();
+        }
+    }
 
     public bool IsWorking
     {
@@ -93,28 +109,31 @@ internal sealed class MainViewModel : ObservableObject
         Path.GetExtension(path) is { } extension &&
         (extension.Equals(".xlsx", StringComparison.OrdinalIgnoreCase) || extension.Equals(".xlsm", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>Takes the first supported file: one file and one product per run.</summary>
     public void AddFiles(IEnumerable<string> paths)
     {
         if (IsWorking) return;
-        if (Files.Count > 0 && Files.All(f => f.IsFinished)) Files.Clear();
-        var skipped = 0;
-        foreach (var path in paths)
-        {
-            if (!IsSupportedFile(path) || !File.Exists(path)) { skipped++; continue; }
-            if (Files.Any(f => string.Equals(f.SourcePath, path, StringComparison.OrdinalIgnoreCase))) continue;
-            Files.Add(new WorkbookItem(path, ResolveOutput(path, null), item => Files.Remove(item)));
-        }
+        var all = paths.ToList();
+        var supported = all.Where(p => IsSupportedFile(p) && File.Exists(p)).ToList();
         HasError = false;
-        Status = skipped > 0
-            ? $"Đã bỏ qua {skipped} file không phải Excel .xlsx/.xlsm."
-            : "Bấm Tạo để dán code VBA. File gốc được giữ nguyên.";
+        if (supported.Count == 0)
+        {
+            Status = "Chỉ nhận file Excel .xlsx hoặc .xlsm.";
+            return;
+        }
+        Workbook = new WorkbookItem(supported[0], OutputFor(supported[0]), _ => Workbook = null);
+        Status = all.Count > 1
+            ? "Mỗi lần chỉ đóng gói một file cho một sản phẩm; đã lấy file đầu tiên."
+            : "Nhập sản phẩm rồi bấm Tạo. File gốc được giữ nguyên.";
     }
 
     // Blocked while an app update downloads: applying it restarts the app and would cut an install short.
-    private bool CanCreate() => IsIdle && !Update.IsDownloading && Files.Any(f => f.State != WorkbookItemState.Done) && Package.Current is not null;
+    private bool CanCreate() => IsIdle && !Update.IsDownloading && _workbook is { State: not WorkbookItemState.Done } &&
+                                Product.Product is not null && Package.Current is not null;
 
     private async Task CreateAsync()
     {
+        if (_workbook is not { } item || Product.Product is not { } product) return;
         IsWorking = true;
         HasError = false;
         Warnings = [];
@@ -123,7 +142,7 @@ internal sealed class MainViewModel : ObservableObject
         {
             var package = await PrepareAsync();
             if (package is null) return;
-            await InstallAllAsync(package);
+            await InstallAsync(item, product, package);
         }
         catch (Exception ex)
         {
@@ -156,80 +175,65 @@ internal sealed class MainViewModel : ObservableObject
         return status.Package;
     }
 
-    private async Task InstallAllAsync(VbaPackage package)
+    private async Task InstallAsync(WorkbookItem item, LicenseProduct product, VbaPackage package)
     {
-        var pending = Files.Where(f => f.State != WorkbookItemState.Done).ToList();
-        var warnings = new List<string>();
-        var succeeded = 0;
-        for (var index = 0; index < pending.Count; index++)
+        item.State = WorkbookItemState.Working;
+        item.Message = null;
+        item.OutputPath = OutputPathResolver.Resolve(item.SourcePath, product, _outputDirectory);
+        var progress = new Progress<VbaInstallProgress>(p =>
         {
-            var item = pending[index];
-            var position = index;
-            item.State = WorkbookItemState.Working;
-            item.Message = null;
-            item.OutputPath = ResolveOutput(item.SourcePath, item);
-            var progress = new Progress<VbaInstallProgress>(p =>
-            {
-                Status = pending.Count > 1 ? $"[{position + 1}/{pending.Count}] {item.FileName}: {p.Stage}" : p.Stage;
-                ProgressPercent = (position * 100 + p.Percent) / pending.Count;
-            });
+            Status = p.Stage;
+            ProgressPercent = p.Percent;
+        });
 
-            VbaPackageInstallResult result;
-            try
-            {
-                result = await _services.Installer.InstallAsync(new(item.SourcePath, item.OutputPath, package), progress);
-            }
-            finally
-            {
-                // Never leave a row stuck on "Đang xử lý…" (its remove button stays disabled in that state).
-                if (item.State == WorkbookItemState.Working) item.State = WorkbookItemState.Failed;
-            }
-            item.State = result.Succeeded ? WorkbookItemState.Done : WorkbookItemState.Failed;
-            item.Message = result.Succeeded ? null : result.Message;
-            if (!result.Succeeded) continue;
-            succeeded++;
-            _lastOutput = result.OutputPath;
-            warnings.AddRange(result.Warnings ?? []);
+        VbaPackageInstallResult result;
+        try
+        {
+            result = await _services.Installer.InstallAsync(new(item.SourcePath, item.OutputPath, package, product), progress);
         }
-
-        Warnings = warnings.Distinct().ToList();
-        OnPropertyChanged(nameof(CanOpenOutput));
-        ReportBatch(pending, succeeded, package.Version);
-    }
-
-    private void ReportBatch(IReadOnlyList<WorkbookItem> processed, int succeeded, string version)
-    {
-        ProgressPercent = 100;
-        if (succeeded == processed.Count)
+        finally
         {
-            Status = processed.Count == 1
-                ? $"Xong! Đã tạo {processed[0].OutputName} với code VBA v{version}. File gốc được giữ nguyên."
-                : $"Xong! Đã tạo {succeeded} file với code VBA v{version}. File gốc được giữ nguyên.";
+            // Never leave the row stuck on "Đang xử lý…" (its remove button stays disabled in that state).
+            if (item.State == WorkbookItemState.Working) item.State = WorkbookItemState.Failed;
+        }
+        item.State = result.Succeeded ? WorkbookItemState.Done : WorkbookItemState.Failed;
+        item.Message = result.Succeeded ? null : result.Message;
+        ProgressPercent = 100;
+        if (!result.Succeeded)
+        {
+            Trust.Refresh();
+            SetFailure(result.Message);
             return;
         }
-        Trust.Refresh();
-        SetFailure(processed.Count == 1
-            ? processed[0].Message ?? "Không tạo được file."
-            : $"Đã tạo {succeeded}/{processed.Count} file. Xem lý do ở từng dòng báo lỗi, sửa rồi bấm Tạo lại.");
+        _lastOutput = result.OutputPath;
+        Warnings = result.Warnings ?? [];
+        OnPropertyChanged(nameof(CanOpenOutput));
+        Status = $"Xong! Đã tạo {item.OutputName} cho {product.ProductKey} {product.Version} (code VBA v{package.Version}). " +
+                 "Mở thử file để kích hoạt rồi mới tải lên cửa hàng. File gốc được giữ nguyên.";
     }
 
-    private string ResolveOutput(string source, WorkbookItem? self)
+    private string OutputFor(string source) =>
+        Product.Product is { } product ? OutputPathResolver.Resolve(source, product, _outputDirectory) : NoProductOutput;
+
+    private void RefreshOutput()
     {
-        var reserved = Files.Where(f => !ReferenceEquals(f, self)).Select(f => f.OutputPath)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return OutputPathResolver.Resolve(source, _outputDirectory, reserved);
+        if (_workbook is { State: not WorkbookItemState.Working } item)
+        {
+            if (item.State == WorkbookItemState.Done) item.State = WorkbookItemState.Ready;
+            item.OutputPath = OutputFor(item.SourcePath);
+        }
     }
 
     private void Browse()
     {
         var dialog = new OpenFileDialog
         {
-            Title = "Chọn file Excel cần dán code VBA",
+            Title = "Chọn file Excel sản phẩm cần đóng gói bản quyền",
             Filter = "File Excel (*.xlsx;*.xlsm)|*.xlsx;*.xlsm",
             CheckFileExists = true,
-            Multiselect = true
+            Multiselect = false
         };
-        if (dialog.ShowDialog(_owner) == true) AddFiles(dialog.FileNames);
+        if (dialog.ShowDialog(_owner) == true) AddFiles([dialog.FileName]);
     }
 
     private void ChangeOutputFolder()
@@ -241,8 +245,7 @@ internal sealed class MainViewModel : ObservableObject
     private void SetOutputDirectory(string? directory)
     {
         _outputDirectory = directory;
-        foreach (var item in Files.Where(f => f.State != WorkbookItemState.Done))
-            item.OutputPath = ResolveOutput(item.SourcePath, item);
+        RefreshOutput();
         OnPropertyChanged(nameof(OutputFolderText));
         OnPropertyChanged(nameof(HasCustomOutputFolder));
         RaiseCommands();
