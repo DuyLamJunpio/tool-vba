@@ -64,6 +64,9 @@ public static class DocumentModuleMerger
     /// </summary>
     private const string CloseEvent = "Workbook_BeforeClose";
 
+    /// <summary>"If cond Then stmt" on one line without Else (a line with Else does not match).</summary>
+    private static readonly Regex SingleLineIf = new(@"^If\s+(?!.*\bElse\b)(.+?)\s+Then\s+(\S.*)$", Options);
+
     /// <summary>A statement that leaves the handler before its last line: Exit Sub/Function or a bare End.</summary>
     private static readonly Regex EarlyExit = new(
         @"\bExit\s+(?:Sub|Function)\b|(?:^|:|\bThen\b|\bElse\b)\s*End\s*(?:'.*)?$", Options);
@@ -171,13 +174,23 @@ public static class DocumentModuleMerger
         return null;
     }
 
-    /// <summary>"If Not Cancel Then …" on one line for one statement, an If block otherwise.</summary>
+    /// <summary>
+    /// "If Not Cancel Then …" on one line for one statement, an If block otherwise. A single-line
+    /// "If cond Then stmt" (the shipped "If ThisWorkbook.Saved Then …", owner 08/11/2026 after CL-1) becomes
+    /// "If Not Cancel And (cond) Then stmt".
+    /// </summary>
     private static List<string> GuardedByCancel(List<string> body)
     {
         // A comment is no statement: "If Not Cancel Then ' note" would open a block If without End If.
         var statements = body.Where(l => !string.IsNullOrWhiteSpace(l) && !IsComment(l)).Select(l => l.Trim()).ToList();
-        if (statements.Count == 1) return ["    If Not Cancel Then " + statements[0]];
-        return ["    If Not Cancel Then", .. statements.Select(s => "        " + s), "    End If"];
+        if (statements.Count != 1) return ["    If Not Cancel Then", .. statements.Select(s => "        " + s), "    End If"];
+        var singleLineIf = SingleLineIf.Match(statements[0]);
+        if (singleLineIf.Success)
+            return [$"    If Not Cancel And ({singleLineIf.Groups[1].Value}) Then {singleLineIf.Groups[2].Value}"];
+        // An If with Else on one line cannot take another condition without changing what Else covers.
+        if (statements[0].StartsWith("If ", StringComparison.OrdinalIgnoreCase))
+            return ["    If Not Cancel Then", "        " + statements[0], "    End If"];
+        return ["    If Not Cancel Then " + statements[0]];
     }
 
     private static bool IsComment(string line) => line.TrimStart().StartsWith('\'');

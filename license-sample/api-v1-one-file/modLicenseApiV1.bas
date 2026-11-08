@@ -270,7 +270,10 @@ CloseUnlicensed:
 End Sub
 
 Public Sub Auto_Close()
-    License_OnClose
+    ' Excel runs Auto_Close before its "Save changes?" prompt. With unsaved changes, wait:
+    ' Save hides the sheets in Workbook_BeforeSave, Don't Save keeps the saved (hidden) file,
+    ' and Cancel keeps the workbook open with its access (test CL-1, DEC-115 addendum 3).
+    If ThisWorkbook.Saved Then License_OnClose
 End Sub
 
 Public Function License_OnClose() As Boolean

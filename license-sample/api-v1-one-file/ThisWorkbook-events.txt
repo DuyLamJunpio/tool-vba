@@ -3,7 +3,7 @@
 ' Auto_Open is the startup entry point; do not also call it twice on normal open.
 
 Private Sub Workbook_BeforeClose(Cancel As Boolean)
-    modLicenseApiV1.License_OnClose
+    If ThisWorkbook.Saved Then modLicenseApiV1.License_OnClose
 End Sub
 
 Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)

@@ -51,10 +51,13 @@ public sealed class DocumentModuleMergerTests
         Assert.DoesNotContain("mLoaded = True", second.Code);
     }
 
+    // Body of the shipped BeforeClose (ThisWorkbook-events.txt): skip while Excel is about to ask "Save changes?".
+    private const string CloseBody = "    If ThisWorkbook.Saved Then modLicenseApiV1.License_OnClose\r\n";
+
     // DEC-115: the licensing events go at the top of the product's own handlers instead of refusing.
     private const string LicenseEvents =
         "Private Sub Workbook_BeforeClose(Cancel As Boolean)\r\n" +
-        "    modLicenseApiV1.License_OnClose\r\n" +
+        CloseBody +
         "End Sub\r\n" +
         "\r\n" +
         "Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)\r\n" +
@@ -198,7 +201,7 @@ public sealed class DocumentModuleMergerTests
     [InlineData("Finish:")]
     public void Refuses_a_package_event_body_that_would_change_the_product_handler(string line)
     {
-        var package = LicenseEvents.Replace("    modLicenseApiV1.License_OnClose\r\n", $"{line}\r\n    modLicenseApiV1.License_OnClose\r\n");
+        var package = LicenseEvents.Replace(CloseBody, $"{line}\r\n{CloseBody}");
         const string product = "Private Sub Workbook_BeforeClose(Cancel As Boolean)\r\n    DoEvents\r\nEnd Sub\r\n";
 
         var result = DocumentModuleMerger.Merge(product, package);
@@ -224,7 +227,7 @@ public sealed class DocumentModuleMergerTests
         var signature = lines.IndexOf("Private Sub Workbook_BeforeClose(Cancel As Boolean)");
         Assert.Equal("    If MsgBox(\"Ban chac chan muon dong?\", vbYesNo) = vbNo Then Cancel = True", lines[signature + 1]);
         Assert.Equal(DocumentModuleMerger.HookBegin, lines[signature + 2]);
-        Assert.Equal("    If Not Cancel Then modLicenseApiV1.License_OnClose", lines[signature + 3]);
+        Assert.Equal("    If Not Cancel And (ThisWorkbook.Saved) Then modLicenseApiV1.License_OnClose", lines[signature + 3]);
         Assert.Equal(DocumentModuleMerger.HookEnd, lines[signature + 4]);
         Assert.Equal("End Sub", lines[signature + 5]);
     }
@@ -232,7 +235,7 @@ public sealed class DocumentModuleMergerTests
     [Fact]
     public void Wraps_a_close_body_of_several_lines_in_one_if_block()
     {
-        var package = LicenseEvents.Replace("    modLicenseApiV1.License_OnClose\r\n", "    modLicenseApiV1.License_OnClose\r\n    modLicenseApiV1.License_OnClose\r\n");
+        var package = LicenseEvents.Replace(CloseBody, "    modLicenseApiV1.License_OnClose\r\n    modLicenseApiV1.License_OnClose\r\n");
 
         var result = DocumentModuleMerger.Merge(ProductWithCloseHandler, package);
 
@@ -244,13 +247,60 @@ public sealed class DocumentModuleMergerTests
     public void Does_not_count_a_comment_as_the_one_close_statement()
     {
         // "If Not Cancel Then ' note" would be a block If without End If.
-        var package = LicenseEvents.Replace("    modLicenseApiV1.License_OnClose\r\n", "    ' note\r\n    modLicenseApiV1.License_OnClose\r\n");
+        var package = LicenseEvents.Replace(CloseBody, "    ' note\r\n" + CloseBody);
+
+        var result = DocumentModuleMerger.Merge(ProductWithCloseHandler, package);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Contains("    If Not Cancel And (ThisWorkbook.Saved) Then modLicenseApiV1.License_OnClose\r\n", result.Code);
+        Assert.DoesNotContain("Then '", result.Code);
+    }
+
+    [Fact]
+    public void Guards_a_plain_close_statement_with_cancel_only()
+    {
+        var package = LicenseEvents.Replace(CloseBody, "    modLicenseApiV1.License_OnClose\r\n");
 
         var result = DocumentModuleMerger.Merge(ProductWithCloseHandler, package);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Contains("    If Not Cancel Then modLicenseApiV1.License_OnClose\r\n", result.Code);
-        Assert.DoesNotContain("If Not Cancel Then '", result.Code);
+    }
+
+    [Fact]
+    public void Uses_an_if_block_when_the_one_close_statement_is_an_if_with_else()
+    {
+        var package = LicenseEvents.Replace(CloseBody, "    If ThisWorkbook.Saved Then modLicenseApiV1.License_OnClose Else Beep\r\n");
+
+        var result = DocumentModuleMerger.Merge(ProductWithCloseHandler, package);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Contains("    If Not Cancel Then\r\n        If ThisWorkbook.Saved Then modLicenseApiV1.License_OnClose Else Beep\r\n    End If\r\n", result.Code);
+    }
+
+    [Fact]
+    public void Shipped_close_event_skips_the_licensing_close_while_excel_will_ask_to_save()
+    {
+        // CL-1 (owner, real Excel): BeforeClose runs before "Save changes?"; Cancel there kept the file open with its
+        // sheets already hidden. With unsaved changes the call now waits: Save hides through BeforeSave, Don't Save
+        // leaves the file on disk as it was saved (hidden).
+        var events = File.ReadAllText(ShippedEventsPath());
+
+        var standalone = DocumentModuleMerger.Merge("Option Explicit\r\n", events);
+        var hooked = DocumentModuleMerger.Merge(ProductWithCloseHandler, events);
+
+        Assert.True(standalone.Succeeded, standalone.Error);
+        Assert.Contains("    If ThisWorkbook.Saved Then modLicenseApiV1.License_OnClose\r\n", standalone.Code);
+        Assert.True(hooked.Succeeded, hooked.Error);
+        Assert.Contains("    If Not Cancel And (ThisWorkbook.Saved) Then modLicenseApiV1.License_OnClose\r\n", hooked.Code);
+    }
+
+    private static string ShippedEventsPath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "ToolVba.sln")))
+            directory = directory.Parent;
+        return Path.Combine(directory!.FullName, "license-sample", "api-v1-one-file", "ThisWorkbook-events.txt");
     }
 
     [Fact]
