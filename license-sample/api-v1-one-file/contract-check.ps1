@@ -45,7 +45,14 @@ foreach ($required in @(
     'If PolicyRequiresOnline(nowUnix, cachedTime, expiry, interval, graceHours) Then',
     'If mErrorCode <> "NETWORK_UNAVAILABLE" Then Exit Sub',
     'Private Function CacheClear() As Boolean',
-    'DeleteSetting CACHE_APP, CACHE_SECTION',
+    'DeleteSetting CACHE_APP, CacheSection()',
+    'CacheSection = CACHE_SECTION & "_" & Cfg_ProductKey()',
+    '""device_name""',
+    'Private Function SafeDeviceName(',
+    'SafeDeviceName(Environ$("COMPUTERNAME"))',
+    'Private Function CopyTextToClipboard(',
+    'If CopyTextToClipboard(userCode) Then',
+    'vbYesNo + vbInformation, "Kich hoat giay phep"',
     'If ShouldClearCacheForServerError(mErrorCode, httpStatus) Then _',
     'InvalidateCachedActivation "DEVICE_MISMATCH"',
     'InvalidateCachedActivation "TOKEN_INVALID"',
@@ -78,24 +85,34 @@ foreach ($forbidden in @(
     'ActiveWorkbook.Close', 'Workbooks.Close',
     'Debug.Print', 'BEGIN PRIVATE KEY', 'shared secret',
     'AccessToken', '"/activations"', '"/activations/validate"',
-    'Cfg_KeyId()', 'Cfg_Ed25519PublicKeyBase64()', 'GetDrive("C:")'
+    'Cfg_KeyId()', 'Cfg_Ed25519PublicKeyBase64()', 'GetDrive("C:")',
+    'vbYesNoCancel', 'CACHE_APP, CACHE_SECTION'
 )) {
     if ($text.IndexOf($forbidden, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
         throw "Forbidden VBA source pattern: $forbidden"
     }
 }
 
-foreach ($blankConfig in @('Cfg_ApiBaseUrl', 'Cfg_ProductKey', 'Cfg_ProductVersion', 'Cfg_ActivationWebUrl', 'Cfg_ProxyServer')) {
+# Per-product values stay blank in the source; tool-vba fills them when packaging a product.
+foreach ($blankConfig in @('Cfg_ProductKey', 'Cfg_ProductVersion', 'Cfg_ProxyServer')) {
     if ($text -notmatch ($blankConfig + ' = vbNullString')) { throw "$blankConfig must start blank" }
+}
+# Global production values (owner, 08/11/2026).
+foreach ($globalConfig in @(
+    'Cfg_ApiBaseUrl = "https://shop.sunprime.vn/api/v1"',
+    'Cfg_ActivationWebUrl = "https://shop.sunprime.vn/account/activate"'
+)) {
+    if (-not $text.Contains($globalConfig)) { throw "Missing production configuration: $globalConfig" }
 }
 if ($text -notmatch 'Cfg_ProtectedSheetNames = Array\(\)') { throw 'Protected sheet names must start empty' }
 $flat = $text -replace ' _\r?\n\s*', ' '
 $ids = [regex]::Match($flat, 'Cfg_ActivationKeyIds = Array\("([A-Za-z0-9._-]+)", (vbNullString|"[A-Za-z0-9._-]+")\)')
 $keys = [regex]::Match($flat, 'Cfg_ActivationPublicKeysBase64 = Array\(\s*"([A-Za-z0-9+/=]+)", (vbNullString|"[A-Za-z0-9+/=]+")\)')
 if (-not $ids.Success -or -not $keys.Success) { throw 'Two explicit kid/public-key slots are required' }
-if ($ids.Groups[1].Value -cne 'k2026-10' -or
-    $keys.Groups[1].Value -cne 'iCNGgbXlaYmAsu5XJewI7h6935JuPaEnASEj8qvPGaI=') {
-    throw 'The existing first deployment key must remain unchanged'
+# Production activation key of shop.sunprime.vn (owner, 08/11/2026); replaced the 29/10 k2026-10 test key.
+if ($ids.Groups[1].Value -cne 'k-d7b49d36a6111497' -or
+    $keys.Groups[1].Value -cne 'BdUaYauU+Te7xcYAb7ShcTlNUrQ47uRAsJqKboQm63s=') {
+    throw 'The first key slot must hold the production activation key'
 }
 if ([Convert]::FromBase64String($keys.Groups[1].Value).Length -ne 32) { throw 'Invalid first Ed25519 key size' }
 if ($ids.Groups[2].Value -cne 'vbNullString' -or $keys.Groups[2].Value -cne 'vbNullString') {
@@ -142,7 +159,7 @@ if ($cacheClear -notmatch 'On Error GoTo Failed' -or $cacheClear -notmatch 'Fail
     throw 'Cache deletion must fail closed behind a local error handler'
 }
 $deletions = [regex]::Matches($text, '(?m)^\s*DeleteSetting[^\r\n]*')
-if ($deletions.Count -ne 1 -or $deletions[0].Value.Trim() -cne 'DeleteSetting CACHE_APP, CACHE_SECTION') {
+if ($deletions.Count -ne 1 -or $deletions[0].Value.Trim() -cne 'DeleteSetting CACHE_APP, CacheSection()') {
     throw 'Only the licensing cache section may be deleted, through CacheClear'
 }
 $clearPolicy = [regex]::Match($text, '(?ms)^Private Function ShouldClearCacheForServerError\(.*?^End Function').Value
