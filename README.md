@@ -1,6 +1,6 @@
 # Công cụ đóng gói VBA bản quyền cho Excel
 
-Ứng dụng WPF chạy trên Windows. Người đóng gói **thả file Excel vào và bấm Tạo**: app dán gói code VBA mới nhất vào một bản sao `.xlsm`, file gốc không bị sửa. Gói code và bản thân ứng dụng đều tự cập nhật từ `digital-license-api`.
+Ứng dụng WPF chạy trên Windows. Người đóng gói **thả một file Excel của một sản phẩm, dán mã đóng gói lấy từ Admin web rồi bấm Tạo**: app dán gói code VBA mới nhất (có module bản quyền) vào một bản sao `.xlsm`, điền `productKey` và phiên bản, thêm sheet hướng dẫn và ẩn các sheet khác. File gốc không bị sửa. Gói code và bản thân ứng dụng đều tự cập nhật từ `digital-license-api`.
 
 Mục lục tài liệu: [docs/README.md](docs/README.md).
 
@@ -14,13 +14,37 @@ Chủ dự án chốt lại ngày 08/11/2026:
 - Người đóng gói: chủ dự án và nhân viên được cấp tài khoản ADMIN trên `digital-license-api`. Sau này có thể cấp thêm.
 - App không dùng để phát code nghiệp vụ nội bộ cho nhân viên.
 
-Hiện app **chưa đóng gói được module bản quyền**: máy chủ còn bỏ qua module tên `modLicense*`. Xem [Trạng thái và việc tiếp theo](#trạng-thái-và-việc-tiếp-theo).
+Gói VBA trên máy chủ giờ chứa cả module `modLicense*` (DEC-115). Việc còn lại trước khi dùng thật là deploy và kiểm thử production: xem [Thứ tự deploy và kiểm thử production](#thứ-tự-deploy-và-kiểm-thử-production).
 
 ## Dành cho người đóng gói
 
 1. Cài một lần bằng `ToolVba-win-Setup.exe` (link `…/api/v1/tool/app/ToolVba-win-Setup.exe`). Không cần quyền admin Windows.
-2. Mở app, kéo thả một hoặc nhiều file `.xlsx`/`.xlsm` vào cửa sổ (hoặc bấm **Chọn file…**), rồi bấm **Tạo file có VBA**.
-3. Kết quả lưu cạnh file gốc với tên `<tên>_vba.xlsm`. Nếu tên đã có thì tự đánh số `(2)`, `(3)`… Bấm **Đổi nơi lưu** nếu muốn lưu chỗ khác.
+2. Trên Admin web, mở sản phẩm → khu **Phiên bản** → **Sao chép mã đóng gói**. Nhập số phiên bản sắp đóng gói (gợi ý số kế tiếp; chưa có thì `1.0.0`). Admin chép vào clipboard đúng một dòng `{"productKey":"<mã>","version":"<x.y.z>"}`, không kèm token hay id.
+3. Mở app, kéo thả **một** file `.xlsx`/`.xlsm` của **một** sản phẩm vào cửa sổ (hoặc bấm **Chọn file…**). Dán mã vào ô **Mã đóng gói**, hoặc nhập tay **Mã sản phẩm (productKey)** và **Phiên bản (x.y.z)**. Bấm **Tạo file có bản quyền**. App không đăng nhập vào máy chủ và không gọi route cần tài khoản.
+4. Kết quả lưu cạnh file gốc với tên `<productKey>_<phiên bản>_ban-quyen.xlsm`. Nếu tên đã có thì tự đánh số `(2)`, `(3)`… Bấm **Đổi nơi lưu** nếu muốn lưu chỗ khác.
+5. Tải file kết quả lên đúng sản phẩm và phiên bản trên Admin web. Máy chủ đọc `Cfg_ProductKey` và `Cfg_ProductVersion` trong file và từ chối (400 `PRODUCT_VERSION_LICENSE_MISMATCH`) nếu khác sản phẩm hoặc số phiên bản đang tạo.
+
+**App làm gì với file** (trên bản sao, macro tắt):
+
+- Dán gói code VBA mới nhất, trong đó có module bản quyền `modLicenseApiV1`, rồi điền `Cfg_ProductKey`, `Cfg_ProductVersion` và `Cfg_ProtectedSheetNames` (mọi sheet trừ sheet hướng dẫn).
+- Thêm sheet hướng dẫn **"Huong dan"** làm sheet đầu, luôn hiện (cách Unblock file tải về, link `https://shop.sunprime.vn/guides/macros`). Mọi sheet khác lưu ở `xlSheetVeryHidden`.
+- Ghép lời gọi bản quyền vào thủ tục sự kiện có sẵn của sản phẩm: `BeforeSave` và `AfterSave` ở **đầu** thủ tục, `BeforeClose` ở **cuối** dưới dạng `If Not Cancel And (ThisWorkbook.Saved) Then …` (sản phẩm hỏi "đóng file?" và trả lời Không, hoặc khách bấm Cancel ở hộp "Save changes?" của Excel, thì không mất quyền). Chỗ nào sản phẩm chưa có thủ tục thì thủ tục của gói nằm trong vùng đánh dấu `'=== tool-vba BEGIN code … ===`. Lời gọi chen vào thủ tục có sẵn nằm giữa hai dòng `'=== tool-vba BEGIN/END license hook … ===`.
+- Lưu, mở lại bản đã lưu và kiểm: giá trị Cfg đúng, không sheet nào lộ, sheet hướng dẫn hiện.
+
+**App dừng, nêu lý do và không tạo file khi:**
+
+| Trường hợp | Vì sao |
+| --- | --- |
+| File có thủ tục `Auto_Open` riêng (ngoài module của gói) | Hai `Auto_Open` làm Excel **không chạy cái nào** và không báo lỗi, tức cổng bản quyền im lặng không chạy ([kết quả thử](tests/manual/LicenseGateSmokeTest.md#ca-hai-auto_open)). |
+| `Workbook_BeforeClose` có `Exit Sub`, `Exit Function` hoặc `End` | Lời gọi ở cuối thủ tục có thể bị bỏ qua. |
+| Workbook khóa cấu trúc (Review › Protect Workbook) | Không thêm hay ẩn sheet được. |
+| Có chart sheet (kể cả sheet macro Excel 4 hay hộp thoại, đang bị gọi chung là "chart sheet") | Module chỉ ẩn được worksheet. |
+| Đã có sheet tên "Huong dan" không do tool-vba tạo | Tránh ghi đè sheet của sản phẩm. |
+| File chỉ có sheet hướng dẫn, không còn sheet nào để bảo vệ | Không có gì để ẩn. |
+| Module ngoài gói có `Cfg_ProductKey` hoặc `License_*` (bản cũ của module bản quyền) | Tránh hai bản module. |
+| Gói code trên máy chủ chưa có module bản quyền, hoặc có nhiều module định nghĩa `Cfg_ProductKey` | Xuất bản lại gói từ file mẫu (xem bên dưới). |
+| Mã đóng gói hoặc cặp mã/phiên bản nhập tay sai dạng | `productKey` theo mẫu của cửa hàng, phiên bản `x.y.z`. |
+| Thủ tục trùng tên ngoài vùng đánh dấu (ví dụ `Workbook_Open`) | Xem bảng dưới. |
 
 Các thông báo trên màn hình:
 
@@ -42,9 +66,15 @@ Sau mỗi lần dán, app ghi thuộc tính tài liệu `ToolVba.PackageVersion`
 
 Việc xuất bản nằm trên **Admin web của digital-license-api**, mục **Tải công cụ → Phát hành tool-vba → Xuất bản code VBA**. Chỉ tài khoản ADMIN. App desktop không có phần quản trị.
 
-1. Sửa code trong file Excel mẫu `.xlsm` (module `.bas`, class `.cls`, ThisWorkbook, code của sheet).
-   - Máy chủ **hiện vẫn bỏ qua** module tên bắt đầu bằng `modLicense`. Quy tắc này đang được gỡ để gói chứa được module bản quyền.
-2. Tải file `.xlsm` lên (hoặc các file VBA lẻ `.bas`, `.cls`, `.frm` + `.frx`) → **Kiểm tra** để xem danh sách → nhập ghi chú → **Xuất bản**.
+1. Chuẩn bị file Excel mẫu `.xlsm` (module `.bas`, class `.cls`, ThisWorkbook, code của sheet). Với module bản quyền, dựng bằng script:
+
+   ```powershell
+   .\scripts\build-license-template.ps1
+   ```
+
+   Script dùng Excel ẩn, dán `modLicenseApiV1.bas` và các sự kiện từ [`ThisWorkbook-events.txt`](license-sample/api-v1-one-file/ThisWorkbook-events.txt) (bỏ dòng chú thích), lưu `out\license-template\license-template.xlsm` rồi mở lại để kiểm. **Ba giá trị theo sản phẩm (`Cfg_ProductKey`, `Cfg_ProductVersion`, `Cfg_ProtectedSheetNames`) phải trống** trong mẫu; app điền chúng khi bấm Tạo. Sai thì script báo lỗi và xóa file. Excel treo thì chỉ dừng đúng PID ghi trong `excel.pid`.
+   - Máy chủ giữ module `modLicense*` trong gói (DEC-115 bỏ quy tắc bỏ qua cũ).
+2. Tải file `.xlsm` lên (hoặc các file VBA lẻ `.bas`, `.cls`, `.frm` + `.frx`) → **Kiểm tra** để xem danh sách (phải thấy `modLicenseApiV1`) → nhập ghi chú → **Xuất bản**.
 3. Máy chủ tự tách code, cấp phiên bản (`YYYY.M.D.N`) và ký gói. Người đóng gói nhận bản mới ở lần bấm Tạo tiếp theo.
 4. Lỡ xuất bản bản lỗi: ở danh sách bên dưới bấm **Kích hoạt lại** cạnh bản trước.
 
@@ -78,6 +108,21 @@ Script build bản self-contained win-x64, đóng gói bằng Velopack (có gói
 
 Bản build không có `release.props` đã điền (chạy dev) vẫn mở được, nhưng hiển thị “chưa được cấu hình máy chủ cập nhật” và không dán code.
 
+## Thứ tự deploy và kiểm thử production
+
+Danh sách việc cho chủ dự án, làm **đúng thứ tự** (DEC-115 mục 6: API deploy trước khi tải gói mẫu hoặc file sản phẩm có module bản quyền lên). Chưa làm bước nào trong số này tính đến 08/11/2026.
+
+1. **Deploy API, Admin và Store** từ nhánh `phase/license-packaging` của `digital-license-api` (đã gồm `phase/device-management`: tên máy, trang Thiết bị, tab Khách hàng). Không có migration mới.
+2. **Tải file mẫu lên Admin web.** Chạy `.\scripts\build-license-template.ps1`, rồi ở **Tải công cụ → Phát hành tool-vba → Xuất bản code VBA** tải `out\license-template\license-template.xlsm` lên, bấm **Kiểm tra** (dryRun). Danh sách phải có module bản quyền `modLicenseApiV1`. Đúng thì bấm **Xuất bản**.
+3. **Build và phát hành bản app mới:** `.\scripts\build-app.ps1 -Version <x.y.z>`, tải thư mục `out\release\upload` lên **Phát hành ứng dụng**. Nhân viên mở app, thấy banner và bấm **Cập nhật ngay**.
+4. **Đóng gói thử trong app:** lấy mã đóng gói của `test-01` trên Admin web (**Sao chép mã đóng gói**), mở app, dán mã vào ô **Mã đóng gói**, thả file Excel thử, bấm **Tạo file có bản quyền**.
+5. **Kiểm trên cửa hàng:** tải file kết quả lên sản phẩm `test-01` (đúng phiên bản), rồi dùng tài khoản khách tải về, Unblock file, mở, bấm Enable Content và kích hoạt máy. Kiểm lần lượt:
+   - các sheet sản phẩm hiện ra sau khi kích hoạt (trước đó chỉ thấy "Huong dan");
+   - **tên máy** hiện ở trang **Thiết bị** của khách;
+   - tab **Khách hàng** trong Admin thấy khách, giấy phép và máy.
+
+Nếu bước 2 không thấy `modLicenseApiV1` hoặc bước 5 bị từ chối 400 `PRODUCT_VERSION_LICENSE_MISMATCH`, dừng lại và xem [mục Phát hành](#xuất-bản-gói-code-vba-admin-web) hoặc báo lại.
+
 ## Build, test và chạy
 
 ```powershell
@@ -92,16 +137,19 @@ Self-test với Excel thật. Chỉ dùng file tổng hợp; cần Excel và quy
 dotnet run --project tests\ToolVba.IntegrationRunner\ToolVba.IntegrationRunner.csproj -- --selftest D:\Temp\tool-vba-selftest
 ```
 
-Self-test chạy lần lượt:
+Self-test chạy lần lượt (24 bước, kỳ vọng `PASS: Self-test hoàn tất.`):
 
-1. Cài gói v1 vào `.xlsx`.
-2. Thêm một module của nhân viên, rồi cập nhật lên v2.
-3. Kiểm tra: module của nhân viên còn nguyên, module đã bỏ bị gỡ, không có tên kiểu `modReport1`, ThisWorkbook có đúng một vùng code.
-4. Xác nhận app từ chối khi file có sẵn `Workbook_Open` trùng tên.
+1. Đóng gói bản quyền v1 vào `.xlsx`: sheet đầu là "Huong dan" và đang hiện, có đúng một sheet hướng dẫn, mọi sheet khác `xlSheetVeryHidden`, module bản quyền có mã sản phẩm và phiên bản, tên sheet có dấu ghi bằng `ChrW`.
+2. Thêm một module của nhân viên, rồi cập nhật lên v2 và kiểm lại như trên.
+3. Kiểm tra: module của nhân viên còn nguyên, module đã bỏ bị gỡ, không có tên kiểu `modReport1`, ThisWorkbook tên `ThisWorkbook` và có đúng một vùng code.
+4. Xác nhận app từ chối khi file có sẵn `Workbook_Open` trùng tên, và khi sản phẩm có `Auto_Open` riêng.
+5. Xác nhận lời gọi bản quyền được ghép vào `Workbook_BeforeSave` có sẵn: nằm ở đầu thủ tục, có đúng một thủ tục, code của nhân viên giữ nguyên.
 
 Integration runner còn giữ hai chế độ cũ là `--bas` (một module + manifest) và chèn `vbaProject.bin`.
 
-Kiểm thử tay: [tests/manual/WorkbookSmokeTest.md](tests/manual/WorkbookSmokeTest.md) (app) và [tests/manual/DeviceCodeActivationSmokeTest.md](tests/manual/DeviceCodeActivationSmokeTest.md) (module bản quyền).
+Module bản quyền có bộ kiểm riêng chạy trong Excel thật (64 ca mock và 57 ca hồi quy có chữ ký): xem [Kiểm tra trước phát hành](license-sample/api-v1-one-file/README.md#kiểm-tra-trước-phát-hành). Dựng sẵn mẫu `.xlsm` để xuất bản lên Admin: `.\scripts\build-license-template.ps1`.
+
+Kiểm thử tay: [tests/manual/WorkbookSmokeTest.md](tests/manual/WorkbookSmokeTest.md) (app), [tests/manual/LicenseGateSmokeTest.md](tests/manual/LicenseGateSmokeTest.md) (đóng file và hai `Auto_Open`; file thử dựng bằng `tests/manual/build-manual-test-files.ps1`) và [tests/manual/DeviceCodeActivationSmokeTest.md](tests/manual/DeviceCodeActivationSmokeTest.md) (kích hoạt và cache của module bản quyền).
 
 ## An toàn dữ liệu
 
@@ -131,17 +179,19 @@ Kiểm thử tay: [tests/manual/WorkbookSmokeTest.md](tests/manual/WorkbookSmoke
 | `tests/ToolVba.Tests` | Unit test, không cần Excel |
 | `tests/ToolVba.IntegrationRunner` | Self-test và runner thủ công với Excel thật |
 | `tests/manual` | Kịch bản kiểm thử tay |
-| `scripts/` | Tạo khóa ký, build bản app để tải lên Admin web |
+| `scripts/` | Tạo khóa ký, build bản app để tải lên Admin web, dựng file `.xlsm` mẫu có module bản quyền |
 | `docs/` | Mục lục, hợp đồng API phát hành, lưu trữ |
 
 ## Trạng thái và việc tiếp theo
 
-Cập nhật 08/11/2026, nhánh `feat/one-screen-auto-update`.
+Cập nhật 08/11/2026, nhánh `feat/license-packaging` (chưa push; làm cùng nhánh `phase/license-packaging` của `digital-license-api`, DEC-115).
 
 ### Đã có
 
-- App một màn hình như mô tả ở trên: thả file, Tạo, lưu `<tên>_vba.xlsm`; gói ký ECDSA P-256 tải từ API, có cache và dùng offline; tự cập nhật bằng Velopack; nút **Bật giúp tôi**; xuất bản và **Kích hoạt lại** trên Admin web.
-- Module bản quyền đã chạy thật: **64/64** mock test trong Excel thật và kích hoạt thật sản phẩm thử `test-01` trên `shop.sunprime.vn` đều đạt (08/11/2026). Chi tiết thay đổi: [module README](license-sample/api-v1-one-file/README.md#trạng-thái-08112026).
+- App một màn hình như mô tả ở trên: thả file, dán mã đóng gói, Tạo, lưu `<productKey>_<phiên bản>_ban-quyen.xlsm`; gói ký ECDSA P-256 tải từ API, có cache và dùng offline; tự cập nhật bằng Velopack; nút **Bật giúp tôi**; xuất bản và **Kích hoạt lại** trên Admin web.
+- Đóng gói bản quyền trong app (B1 đến B4): điền `productKey`/phiên bản/sheet bảo vệ, ghép sự kiện vào thủ tục có sẵn (`BeforeClose` đặt cuối), sheet "Huong dan", ẩn sheet khác, kiểm lại bản đã lưu; từ chối các trường hợp nêu ở [Dành cho người đóng gói](#dành-cho-người-đóng-gói).
+- Script `scripts/build-license-template.ps1` dựng file mẫu để xuất bản (B5); ba giá trị theo sản phẩm được kiểm là trống.
+- Kết quả kiểm với Excel thật (08/11/2026): `dotnet test ToolVba.sln` 247/247, build cả solution không cảnh báo, self-test 24/24 bước, `contract-check.ps1` đạt, **64/64** mock và **57/57** hồi quy có chữ ký; ca đóng file (người dùng trả lời Không, và đối chứng không hủy) và ca hai `Auto_Open` đã ghi trong [module README](license-sample/api-v1-one-file/README.md#ca-đóng-file-và-auto_open). Kích hoạt thật sản phẩm thử `test-01` trên `shop.sunprime.vn` đã đạt trước đó.
 - File thử: `out/test-01/test-01_1.0.0_ban-quyen.xlsm` (sheet "Huong dan" hiện, sheet "Du lieu" VeryHidden, có module và sự kiện ThisWorkbook). Thư mục `out/` không commit.
 - Đã làm xong trên `digital-license-api` (08/11/2026, DEC-113, chờ deploy): trang **Thiết bị** cho khách (xem máy, file trên từng máy, gỡ máy; tự gỡ tối đa bằng số thiết bị của gói trong 30 ngày, quá thì liên hệ hỗ trợ). Admin tách tab **Nhân viên** và **Khách hàng** (chi tiết khách có giấy phép và máy; admin gỡ máy không giới hạn).
 
@@ -153,15 +203,14 @@ Cập nhật 08/11/2026, nhánh `feat/one-screen-auto-update`.
 - Không mua chứng chỉ ký mã Authenticode lúc này.
 - `AccessVBOM` bật bằng **Bật giúp tôi** thì giữ nguyên.
 - Một tài khoản ADMIN do chủ dự án quản lý.
+- DEC-115 (xem `docs/DECISIONS.md` ở repo API, kèm hai phụ lục): app không đăng nhập, nhận mã đóng gói dán từ Admin; mỗi lần một file một sản phẩm; kết quả `<productKey>_<phiên bản>_ban-quyen.xlsm`; `BeforeSave`/`AfterSave` đặt đầu thủ tục, `BeforeClose` đặt cuối (`If Not Cancel And (ThisWorkbook.Saved) Then …`, phụ lục 3 sau ca CL-1) và bị từ chối nếu có `Exit Sub`/`Exit Function`/`End`; file có `Auto_Open` riêng bị từ chối; máy chủ kiểm `Cfg_ProductKey`/`Cfg_ProductVersion` khi tải file lên.
 - Xóa zip/artifact phân phối cũ sau 1–2 tuần khi kênh API chạy ổn.
 
-### Việc tiếp theo (để app phục vụ đúng mục đích bản quyền)
+### Việc tiếp theo
 
-1. Gỡ quy tắc máy chủ bỏ qua module tên `modLicense*` (`digital-license-api`: `apps/api/src/modules/tool-releases/vba-source/vba-source-package.ts`).
-2. Khi bấm Tạo: chọn sản phẩm và phiên bản trên cửa hàng, rồi tự điền `Cfg_ProductKey`, `Cfg_ProductVersion`, `Cfg_ProtectedSheetNames`.
-3. Ghép sự kiện bản quyền (`Workbook_BeforeClose`, `Workbook_BeforeSave`, `Workbook_AfterSave`) vào thủ tục sẵn có của sản phẩm, thay vì dừng vì trùng tên.
-4. Tự thêm sheet hướng dẫn "Huong dan" và ẩn mọi sheet khác (`xlSheetVeryHidden`).
-5. Xóa zip/artifact phân phối cũ (sau 1–2 tuần).
+1. Deploy và kiểm thử production theo [Thứ tự deploy và kiểm thử production](#thứ-tự-deploy-và-kiểm-thử-production).
+2. Các ca thử tay trong [LicenseGateSmokeTest.md](tests/manual/LicenseGateSmokeTest.md) đã có kết quả (CL-1 đến CL-3 ĐẠT ngày 09/11/2026; AO-3: không `Auto_Open` nào chạy). Còn thiếu nội dung hộp thông báo hiện ra ở AO-3; ghi vào module README khi thử lại.
+3. Xóa zip/artifact phân phối cũ (sau 1–2 tuần khi kênh API chạy ổn).
 
 Để đợt sau (từ review ngày 08/11/2026, chủ dự án đồng ý hoãn):
 

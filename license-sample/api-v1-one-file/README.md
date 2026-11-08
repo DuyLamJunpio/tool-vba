@@ -12,9 +12,11 @@ Không import cùng các module cũ trong [`license-sample/`](../README.md) vì 
 - Cấu hình chung đã điền (xem [Cấu hình](#cấu-hình)). Giá trị theo sản phẩm vẫn để trống trong source.
 - Cache kích hoạt tách theo sản phẩm: mục Registry `Activation_<productKey>`. Hai sản phẩm trên cùng máy không còn ghi đè kích hoạt của nhau.
 - Hộp thoại kích hoạt chỉ còn Yes/No (bỏ nút Cancel thừa). Mã 8 ký tự được tự chép vào clipboard; khách chỉ cần Ctrl+V trên trang web.
-- **Đang thêm:** gửi tên máy `device_name` khi redeem (xem [Kích hoạt máy](#kích-hoạt-máy)).
+- Đã thêm: gửi tên máy `device_name` khi redeem (xem [Kích hoạt máy](#kích-hoạt-máy)). File có trường này chỉ được tải lên cửa hàng sau khi API đã deploy bản nhận trường đó.
 - Script kiểm tra ngoài Excel chưa theo kịp các thay đổi trên (xem [Kiểm tra trước phát hành](#kiểm-tra-trước-phát-hành)).
 - File thử: `out/test-01/test-01_1.0.0_ban-quyen.xlsm` (sheet "Huong dan" hiện, sheet "Du lieu" VeryHidden, có module và sự kiện ThisWorkbook).
+- **Gắn vào sản phẩm do tool-vba làm** (DEC-115): app điền ba giá trị theo sản phẩm, thêm sheet hướng dẫn, ẩn các sheet khác và ghép sự kiện vào thủ tục có sẵn. File mẫu để xuất bản gói dựng bằng [`scripts/build-license-template.ps1`](../../scripts/build-license-template.ps1).
+- Kết quả các ca đóng file và `Auto_Open` (Excel thật): xem [Ca đóng file và `Auto_Open`](#ca-đóng-file-và-auto_open).
 
 ## Cấu hình
 
@@ -42,16 +44,19 @@ Không import cùng các module cũ trong [`license-sample/`](../README.md) vì 
 | `Cfg_ProductVersion` | Phiên bản đúng của file, ví dụ `1.0.0` |
 | `Cfg_ProtectedSheetNames` | Mọi sheet trừ sheet hướng dẫn "Huong dan", ví dụ `Array("Du lieu")` |
 
-Hiện điền tay trong VBA Editor. Việc tiếp theo của tool-vba là tự điền khi bấm Tạo (xem [README gốc](../../README.md#việc-tiếp-theo-để-app-phục-vụ-đúng-mục-đích-bản-quyền)).
+tool-vba tự điền khi bấm Tạo, từ mã đóng gói lấy trên Admin web (xem [README gốc](../../README.md#dành-cho-người-đóng-gói)). Trong file mẫu xuất bản lên Admin, ba giá trị này **phải trống** (`vbNullString`, `vbNullString`, `Array()`); script dựng mẫu kiểm lại sau khi lưu. Nếu đóng gói tay không qua app thì điền trong VBA Editor.
 
 **Excel không nhận hoặc giữ JWT tài khoản, private key, refresh token hay shared secret.** Public key không phải bí mật. Không sửa `VerifyEd25519Detached` thành `True`; mọi lỗi xác minh đều từ chối quyền.
 
 ## Gắn vào sản phẩm
 
+Từ DEC-115, **tool-vba làm các bước 1 đến 3 dưới đây khi bấm Tạo** ([README gốc](../../README.md#dành-cho-người-đóng-gói) nêu cách dùng và các trường hợp app từ chối). Danh sách bên dưới là đặc tả những gì kết quả phải có, dùng khi kiểm hoặc khi đóng gói tay.
+
 1. Import module, điền ba giá trị theo sản phẩm.
 2. Ghép [ThisWorkbook-events.txt](ThisWorkbook-events.txt) vào module **ThisWorkbook** hiện có, giữ xử lý nghiệp vụ. Không import tệp này như standard module.
-   - `Workbook_BeforeClose` gọi `License_OnClose`.
-   - `Workbook_BeforeSave` ẩn sheet; hủy lưu nếu không ẩn được.
+   - `Workbook_BeforeClose` gọi `License_OnClose` **chỉ khi file không còn thay đổi chưa lưu**: `If ThisWorkbook.Saved Then modLicenseApiV1.License_OnClose`. Khi còn thay đổi, Excel sắp hỏi "Save changes?": chọn Save thì `Workbook_BeforeSave` ẩn sheet trước khi lưu, chọn Don't Save thì file trên đĩa vẫn là bản đã lưu (đã ẩn), chọn Cancel thì file vẫn mở và khách làm tiếp được (ca CL-1).
+   - Khi sản phẩm đã có `Workbook_BeforeClose`, lời gọi nằm ở **cuối** thủ tục: `If Not Cancel And (ThisWorkbook.Saved) Then modLicenseApiV1.License_OnClose`, để sản phẩm hỏi "đóng file?" mà người dùng trả lời Không thì không mất quyền. Thủ tục có `Exit Sub`, `Exit Function` hoặc `End` bị từ chối.
+   - `Workbook_BeforeSave` ẩn sheet; hủy lưu nếu không ẩn được. `Workbook_BeforeSave` và `Workbook_AfterSave` có sẵn thì lời gọi nằm ở **đầu** thủ tục.
    - `Workbook_AfterSave` hiện lại sheet nếu phiên còn quyền.
 3. Sheet hướng dẫn "Huong dan" luôn hiện. **Mọi sheet khác** nằm trong `Cfg_ProtectedSheetNames` và lưu ở `xlSheetVeryHidden`.
    - Không chọn “sheet premium” riêng (quyết định 08/11/2026): chưa kích hoạt thì khách chỉ thấy sheet hướng dẫn.
@@ -59,12 +64,31 @@ Hiện điền tay trong VBA Editor. Việc tiếp theo của tool-vba là tự 
    - Sai tên sheet, workbook khóa cấu trúc hoặc không có sheet hướng dẫn visible: `SHEET_CONFIG_INVALID`, không cấp quyền.
    - Không dùng mật khẩu sheet.
 4. Sheet hướng dẫn nêu cách Unblock file tải về và link `https://shop.sunprime.vn/guides/macros` (xem [File tải từ internet](#file-tải-từ-internet)).
-5. `Auto_Open` là cổng khi mở file trực tiếp. Nếu chương trình khác mở bằng `Workbooks.Open`, nó phải gọi `RunAutoMacros xlAutoOpen` hoặc có cổng `Workbook_Open` phù hợp. Cổng chỉ chạy **một lần**.
+5. `Auto_Open` là cổng khi mở file trực tiếp. Nếu chương trình khác mở bằng `Workbooks.Open`, nó phải gọi `RunAutoMacros xlAutoOpen` hoặc có cổng `Workbook_Open` phù hợp. Cổng chỉ chạy **một lần**. File **không được có `Auto_Open` thứ hai** ở module khác: Excel khi đó không chạy cái nào (xem [Ca đóng file và `Auto_Open`](#ca-đóng-file-và-auto_open)); tool-vba từ chối file như vậy.
 6. Trong thủ tục cần quyền: `If Not License_FeatureAllowed("feature_key") Then Exit Sub`, hoặc `License_PremiumAllowed()` nếu chỉ kiểm tra quyền chung.
 
 Tự gia hạn giữa phiên chỉ xảy ra khi một hàm kiểm tra quyền được gọi; không có timer nền. Khi đến `rvi` hoặc quyền hiện tại hết dùng được, module thử online tối đa một lần mỗi chu kỳ `rvi`, có cờ chống gọi lồng. Thành công thì khách làm tiếp. Lỗi mạng chỉ được xét offline khi cache còn `exp`/`ogh`. Hết quyền giữa phiên thì ẩn sheet, hiện hướng dẫn và đóng riêng workbook không lưu.
 
 Ẩn sheet chỉ hạn chế chia sẻ thông thường, không mã hóa nội dung. Macro bị tắt thì VBA không đóng được file; bản phân phối đã lưu ẩn chỉ hiện sheet hướng dẫn. Người có kỹ thuật vẫn có thể sửa VBA hoặc trích dữ liệu.
+
+## Ca đóng file và `Auto_Open`
+
+Kết quả với Excel thật (08/11/2026). Kịch bản và các bước làm tay: [tests/manual/LicenseGateSmokeTest.md](../../tests/manual/LicenseGateSmokeTest.md).
+
+| Ca | Kết quả |
+| --- | --- |
+| Sản phẩm có `Workbook_BeforeClose` đặt `Cancel = True` (người dùng trả lời Không), đóng bằng lệnh giao diện `FileClose` trong Excel ẩn, macro bật | **ĐẠT.** File vẫn mở, sheet bảo vệ vẫn hiện, `License_OnClose` không chạy, cả qua dòng bản quyền cuối `BeforeClose` (`If Not Cancel Then …`) lẫn qua `Auto_Close`. |
+| Đối chứng: `BeforeClose` không hủy, cùng cách đóng, workbook không có thay đổi chưa lưu | **ĐẠT.** File đóng; ngay sau dòng bản quyền sheet bảo vệ ở `xlSheetVeryHidden`, tức `License_OnClose` đã chạy. |
+| Bấm **Cancel** ở hộp "Save changes?" của Excel (CL-1, chủ dự án làm tay, Excel 16.0.20527 x64) | **Bản trước: KHÔNG ĐẠT.** Với `If Not Cancel Then …`, file vẫn mở nhưng sheet "Du lieu" đã bị ẩn: Excel chạy `BeforeClose` trước hộp này nên `License_OnClose` đã chạy. **Đã sửa** (chủ dự án chọn, 08/11/2026): chỉ gọi khi `ThisWorkbook.Saved`. **Lần 2 (sau khi sửa dòng hook): vẫn KHÔNG ĐẠT.** "Du lieu" bị ẩn ngay khi bấm đóng, trước khi hộp hiện ra, do `Auto_Close` của module. **Đã sửa `Auto_Close`** cùng điều kiện. **Lần 3 (09/11/2026, file thử dựng lại, Excel hiện do script điều khiển, đóng như nút X): ĐẠT.** Khi hộp hiện, "Du lieu" vẫn còn; bấm Hủy bỏ thì file vẫn mở, "Du lieu" hiện, B1 có chữ. |
+| CL-2: bấm **Don't Save** ở hộp đó (cùng script, 09/11/2026) | **ĐẠT.** Mở lại thì file đúng bản đã lưu: "Du lieu" hiện như lúc dựng, B1 trống. |
+| CL-3: bấm **Save** ở hộp đó (chủ dự án làm tay) | **ĐẠT.** File đã lưu chỉ còn "Huong dan" hiện, "Du lieu" ở `veryHidden` (đọc trực tiếp từ file). |
+| Một module có `Auto_Open`, `RunAutoMacros(xlAutoOpen)` | Chạy, mỗi lần gọi chạy một lần. |
+| Hai module cùng có `Public Sub Auto_Open` (module bản quyền và một module khác), `RunAutoMacros(xlAutoOpen)`, thử cả hai thứ tự tạo module | **Không module nào chạy, không có lỗi.** `Application.Run "'file'!Auto_Open"` báo không có macro; gọi kèm tên module (`modLicenseApiV1.Auto_Open`) thì chạy. Cổng bản quyền khi đó **im lặng không chạy** lúc mở file. |
+| Hai `Auto_Open`, mở bằng giao diện (double-click), cả hai thứ tự (AO-3, chủ dự án làm tay) | **Không module nào chạy**: cột A chỉ có tiêu đề "log" đặt sẵn, không thêm dòng `license` hay `other`, kể cả sau Enable Content. Có một hộp thông báo hiện ra (chưa ghi nội dung). Khớp với ca `RunAutoMacros`. Các ca dùng module giả vì `Auto_Open` thật gọi mạng và hiện hộp thoại. |
+
+- Đóng bằng `Workbook.Close` (COM hoặc VBA) không chạy `Auto_Close`; `Workbook_BeforeClose` vẫn chạy. Khi đóng bằng giao diện, Excel chạy cả `Workbook_BeforeClose` lẫn `Auto_Close` của module **trước** hộp "Save changes?" (CL-1 lần 2). Vì vậy `Auto_Close` cũng chỉ gọi `License_OnClose` khi `ThisWorkbook.Saved` (phụ lục 3 của DEC-115).
+- Hạn chế đã chấp nhận: nếu add-in khác để `Application.EnableEvents` tắt thì `Workbook_BeforeSave` không chạy, nên chọn Save ở hộp hỏi có thể lưu sheet đang hiện. Đây cũng là hạn chế sẵn có khi bấm Ctrl+S trong tình huống đó.
+- Vì kết quả hai `Auto_Open`, tool-vba từ chối file có `Auto_Open` riêng thay vì ghép chung.
 
 ## File tải từ internet
 
@@ -120,6 +144,8 @@ Trong Excel Windows:
 1. Tạo `.xlsm` thử riêng, import `modLicenseApiV1.bas`, Debug → Compile VBAProject.
 2. Chạy `License_RunMockTests`: kỳ vọng **64/64** (8 gốc/KAT RFC 8032, 8 policy, 16 phục hồi cache, 32 clock/cycle/key ring/DPAPI/SystemDrive). Không gọi API, không ghi Registry, không cấp quyền.
 3. Sau lệnh `build-excel-regression.mjs`, import `TestResults/modLicenseRegression.bas` vào workbook thử riêng, Compile, chạy `License_RunSignedRegressionTests`: kỳ vọng **57/57**. Bộ sinh dùng API signer với khóa test tạm trong bộ nhớ, không đọc `.env`. **Không đưa module hồi quy vào file khách.**
+
+Chạy tự động trong Excel ẩn (ví dụ trên máy không có người ngồi): các `MsgBox` báo kết quả làm Excel ẩn treo, nên chạy trên **bản sao** nơi mỗi `MsgBox` kết quả được thay bằng ghi một ô (ví dụ `Sheet1!A1 = "PASS 64/64"`); không sửa file trong repo. Ghi PID Excel khi chạy, nếu treo chỉ dừng đúng PID đó. Kết quả 08/11/2026 theo cách này: 64/64 (module thật) và 57/57.
 4. Kích hoạt thật một sản phẩm thử trên `shop.sunprime.vn` (như `test-01`). Không ghi/chụp token, fingerprint, device_code.
 5. Chạy các ca thủ công cần thiết trong [tests/manual/DeviceCodeActivationSmokeTest.md](../../tests/manual/DeviceCodeActivationSmokeTest.md) (44 ca).
 
