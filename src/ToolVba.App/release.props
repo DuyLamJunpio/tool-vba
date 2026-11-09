@@ -9,7 +9,7 @@
     Values can also be passed on the command line: dotnet publish -p:ToolVbaApiBaseUrl=...
   -->
   <PropertyGroup>
-    <ToolVbaApiBaseUrl Condition="'$(ToolVbaApiBaseUrl)' == ''"></ToolVbaApiBaseUrl>
-    <ToolVbaReleasePublicKey Condition="'$(ToolVbaReleasePublicKey)' == ''"></ToolVbaReleasePublicKey>
+    <ToolVbaApiBaseUrl Condition="'$(ToolVbaApiBaseUrl)' == ''">https://shop.sunprime.vn/</ToolVbaApiBaseUrl>
+    <ToolVbaReleasePublicKey Condition="'$(ToolVbaReleasePublicKey)' == ''">MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEai5/dSRmf58Akl7WvF5K2qJzJIUhPGLDZRpz0semG4kxvV8s6f+JS5fauvsVAU4Tg6Bn64RGKR28WQJ9iiMZRw==</ToolVbaReleasePublicKey>
   </PropertyGroup>
 </Project>
