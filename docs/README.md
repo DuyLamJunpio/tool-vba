@@ -1,6 +1,6 @@
 # Mục lục tài liệu tool-vba
 
-Đọc file nào khi nào. Cập nhật 08/11/2026.
+Đọc file nào khi nào. Cập nhật 09/11/2026.
 
 ## Trong repo này
 
@@ -12,7 +12,6 @@
 | [tests/manual/WorkbookSmokeTest.md](../tests/manual/WorkbookSmokeTest.md) | Thử tay app một màn hình với Excel thật: mã đóng gói, các trường hợp bị từ chối, ghép sự kiện. |
 | [tests/manual/LicenseGateSmokeTest.md](../tests/manual/LicenseGateSmokeTest.md) | Thử tay cổng bản quyền khi đóng file (hộp "Save changes?") và khi file có hai `Auto_Open`; kết quả đã có. File thử dựng bằng `tests/manual/build-manual-test-files.ps1`. |
 | [tests/manual/DeviceCodeActivationSmokeTest.md](../tests/manual/DeviceCodeActivationSmokeTest.md) | Thử tay kích hoạt và cache của module bản quyền (44 ca). |
-| [license-sample/README.md](../license-sample/README.md) | Chỉ khi cần biết bộ mẫu nhiều module cũ là gì. |
 | [docs/archive/README.md](archive/README.md) | Tra lịch sử: báo cáo cũ đã thay thế. |
 
 ## Tài liệu chuẩn ở digital-license-api
