@@ -26,6 +26,9 @@ if (-not $api -or -not $key) { throw 'Hãy điền ToolVbaApiBaseUrl và ToolVba
 # The update feed travels over this URL: https only.
 if (-not $api.StartsWith('https://')) { throw 'ToolVbaApiBaseUrl phải dùng https://.' }
 
+# Runtime the setup installs if missing; keep in step with <TargetFramework> of ToolVba.App.
+$DotnetRuntime = 'net10-x64-desktop'
+
 $work = Join-Path $root 'out\release'
 $publishDir = Join-Path $work 'publish'
 $releasesDir = Join-Path $work 'releases'
@@ -34,7 +37,9 @@ foreach ($dir in @($publishDir, $uploadDir)) { if (Test-Path $dir) { Remove-Item
 New-Item -ItemType Directory -Force $releasesDir, $uploadDir | Out-Null
 
 Write-Host "1/3 Build tool-vba $Version"
-dotnet publish (Join-Path $root 'src\ToolVba.App\ToolVba.App.csproj') -c Release -r win-x64 --self-contained true "-p:Version=$Version" -o $publishDir
+# Framework-dependent: the bundled .NET runtime made each file ~70 MB, over Cloudflare's 100 MB request
+# limit for one upload. The Velopack setup installs the .NET Desktop Runtime when a machine lacks it.
+dotnet publish (Join-Path $root 'src\ToolVba.App\ToolVba.App.csproj') -c Release -r win-x64 --self-contained false "-p:Version=$Version" -o $publishDir
 if ($LASTEXITCODE -ne 0) { throw 'dotnet publish thất bại.' }
 
 Write-Host '2/3 Tải bản trước từ máy chủ (để tạo gói cập nhật nhỏ)'
@@ -42,7 +47,7 @@ vpk download http --url "$api/api/v1/tool/app/" --outputDir $releasesDir
 if ($LASTEXITCODE -ne 0) { Write-Host '   Chưa có bản trước trên máy chủ (lần phát hành đầu) - tiếp tục.' }
 
 Write-Host '3/3 Đóng gói Velopack'
-vpk pack --packId ToolVba --packVersion $Version --packDir $publishDir --mainExe tool-vba.exe --packTitle 'Dong goi VBA' --outputDir $releasesDir
+vpk pack --packId ToolVba --packVersion $Version --packDir $publishDir --mainExe tool-vba.exe --packTitle 'Dong goi VBA' --framework $DotnetRuntime --runtime win-x64 --outputDir $releasesDir
 if ($LASTEXITCODE -ne 0) { throw 'vpk pack thất bại.' }
 
 $names = @('releases.win.json', "ToolVba-$Version-full.nupkg", "ToolVba-$Version-delta.nupkg", 'ToolVba-win-Setup.exe')
