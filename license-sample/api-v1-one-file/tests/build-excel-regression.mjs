@@ -13,7 +13,7 @@ const { ActivationTokenService } = await import(pathToFileURL(resolve(apiRoot,
   'apps/api/src/modules/licensing/token.service.ts')).href);
 let source = readFileSync(resolve(root, 'modLicenseApiV1.bas'), 'ascii');
 const kid = /Cfg_ActivationKeyIds = Array\("([^"]+)"/.exec(source)[1];
-assert.equal(kid, 'k2026-10', 'The first deployment kid must be preserved');
+assert.equal(kid, 'k-d7b49d36a6111497', 'The first key slot must hold the production kid (owner, 08/11/2026)');
 const primary = generateKeyPairSync('ed25519');
 const secondary = generateKeyPairSync('ed25519');
 const primaryPublic = primary.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
@@ -80,10 +80,16 @@ function replaceProcedure(name, kind, body) {
 const replaceFunction = (name, body) => replaceProcedure(name, 'Function', body);
 source = source.replace('Attribute VB_Name = "modLicenseApiV1"', 'Attribute VB_Name = "modLicenseRegression"');
 source = source.replace(/^Public /gm, 'Private ');
-source = source.replace('Cfg_ApiBaseUrl = vbNullString', 'Cfg_ApiBaseUrl = "https://regression.invalid/api/v1"');
+// The production URLs are replaced so the harness can never reach shop.sunprime.vn.
+function replaceOnce(from, to) {
+  assert(source.includes(from), `Missing source text: ${from}`);
+  source = source.replace(from, to);
+}
+replaceOnce('Cfg_ApiBaseUrl = "https://shop.sunprime.vn/api/v1"', 'Cfg_ApiBaseUrl = "https://regression.invalid/api/v1"');
 source = source.replace('Cfg_ProductKey = vbNullString', 'Cfg_ProductKey = "vba_regression"');
 source = source.replace('Cfg_ProductVersion = vbNullString', 'Cfg_ProductVersion = "1.2.3"');
-source = source.replace('Cfg_ActivationWebUrl = vbNullString', 'Cfg_ActivationWebUrl = "https://regression.invalid/activate"');
+replaceOnce('Cfg_ActivationWebUrl = "https://shop.sunprime.vn/account/activate"', 'Cfg_ActivationWebUrl = "https://regression.invalid/activate"');
+assert(!source.includes('shop.sunprime.vn'), 'The harness must not keep a production URL');
 assert(source.includes('ThisWorkbook.Close SaveChanges:=False'));
 source = source.replaceAll('ThisWorkbook.Close SaveChanges:=False', 'tCloses = tCloses + 1');
 const globals = `
@@ -110,7 +116,10 @@ Private tSheetConfigValid As Boolean
 Private tCiphertext As String
 Private tUseNativeCacheLoad As Boolean
 `;
-source = source.replace('Private Function Cfg_ApiBaseUrl()', globals + '\nPrivate Function Cfg_ApiBaseUrl()');
+// Module-level variables must precede every procedure, so insert them before the first one.
+const firstProcedure = /^Private (?:Function|Sub) /m.exec(source);
+assert(firstProcedure, 'No procedure found');
+source = source.slice(0, firstProcedure.index) + globals + '\n' + source.slice(firstProcedure.index);
 replaceFunction('UtcUnixNow', `Private Function UtcUnixNow() As Double
     UtcUnixNow = tNow
 End Function`);
@@ -146,10 +155,10 @@ replaceFunction('DeviceFingerprintHash', `Private Function DeviceFingerprintHash
 End Function`);
 const nativeLoad = /^Private Function CacheLoad\([\s\S]*?^End Function/m.exec(source)[0]
   .replaceAll('CacheLoad', 'NativeCacheLoadTest')
-  .replace('GetSetting(CACHE_APP, CACHE_SECTION, "Ciphertext", vbNullString)', 'tCiphertext');
+  .replace('GetSetting(CACHE_APP, CacheSection(), "Ciphertext", vbNullString)', 'tCiphertext');
 const nativeSave = /^Private Function CacheSave\([\s\S]*?^End Function/m.exec(source)[0]
   .replaceAll('CacheSave', 'NativeCacheSaveTest')
-  .replace('SaveSetting CACHE_APP, CACHE_SECTION, "Ciphertext", cipher', 'tCiphertext = cipher');
+  .replace('SaveSetting CACHE_APP, CacheSection(), "Ciphertext", cipher', 'tCiphertext = cipher');
 replaceFunction('CacheLoad', `Private Function CacheLoad( _
     ByRef token As String, ByRef fingerprint As String, ByRef validatedUnix As Double, _
     ByRef maxSeenUnix As Double) As Boolean

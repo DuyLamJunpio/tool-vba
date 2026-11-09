@@ -46,7 +46,11 @@ internal sealed class InstallWorkArea : IDisposable
         SavedPath = paths.IsXlsx ? tempBase + ".xlsm" : TempPath;
         ConvertsToMacroEnabled = paths.IsXlsx;
         _packageDirectory = Path.Combine(Path.GetTempPath(), $"tool-vba-pkg-{Guid.NewGuid():N}");
+        LicenseDirectory = Path.Combine(Path.GetTempPath(), $"tool-vba-license-{Guid.NewGuid():N}");
     }
+
+    /// <summary>Holds the copy of the licensing module filled for one product, apart from the verified package.</summary>
+    public string LicenseDirectory { get; }
 
     public string TempPath { get; }
     public string SavedPath { get; }
@@ -81,6 +85,7 @@ internal sealed class InstallWorkArea : IDisposable
         TryDelete(() => { if (File.Exists(TempPath)) File.Delete(TempPath); });
         TryDelete(() => { if (ConvertsToMacroEnabled && File.Exists(SavedPath)) File.Delete(SavedPath); });
         TryDelete(() => { if (Directory.Exists(_packageDirectory)) Directory.Delete(_packageDirectory, recursive: true); });
+        TryDelete(() => { if (Directory.Exists(LicenseDirectory)) Directory.Delete(LicenseDirectory, recursive: true); });
     }
 
     private static void TryDelete(Action delete)

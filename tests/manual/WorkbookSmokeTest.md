@@ -1,40 +1,63 @@
-# Kiểm thử thêm module VBA vào workbook Excel
+# Kiểm thử tay app đóng gói bản quyền một màn hình
 
-Fixture `tests/fixtures/ToolVbaSmokeTest.bas` chỉ kiểm tra định dạng workbook rồi hiện hộp thoại; nó không ghi vào workbook. Manifest cố định tại `tests/fixtures/ToolVbaSmokeTest.manifest.json` xác nhận SHA-256. Không dùng module này với dữ liệu phát hành.
+Dùng máy Windows có Excel desktop và bản app đã cấu hình `release.props`. Chỉ dùng file tổng hợp hoặc bản sao. Ghi SHA-256 file nguồn trước mỗi ca; sau ca phải không đổi. Không chạy macro của file nguồn.
 
-## Test case TV-REAL-001: thêm module, giữ workbook nguồn và project VBA gốc
+Mỗi ca "Tạo" cần một mã đóng gói: dán mã lấy trên Admin web (**Sao chép mã đóng gói** ở sản phẩm), hoặc nhập tay `productKey` và phiên bản `x.y.z`. Ví dụ trong bảng dùng `test-01` và `1.0.0`.
 
-**Điều kiện:** máy Windows thử nghiệm có Excel; quản trị viên đã cấu hình quyền Trust access theo chính sách; output là đường dẫn mới; macro không được chạy trong lúc đóng gói.
+Chạy self-test tự động trước, kỳ vọng `PASS: Self-test hoàn tất.` (thư mục phải trống):
 
-1. Ghi SHA-256 của `HR_Quan_ly_nhan_su_v2.0.xlsm` trước thử nghiệm.
-2. Chạy tool, chọn chế độ “Thêm module .bas vào project hiện có”. Chọn workbook HR, file `.bas`, manifest, và output mới, ví dụ `HR_Quan_ly_nhan_su_v2.0_ToolVbaTest.xlsm`.
-3. Xác nhận tóm tắt. Tool phải làm việc trên file tạm, không tự bật Trust Center hoặc chạy macro.
-4. Kỳ vọng thành công chỉ khi SHA-256 module khớp manifest, tên module chưa tồn tại, component cũ vẫn còn, module mới đã import, package `.xlsm` hợp lệ và hash nguồn không đổi.
-5. So hash nguồn sau chạy. Nó phải trùng giá trị ban đầu. Trong Excel, mở output trên máy thử nghiệm và xác nhận module mới cùng các component cũ hiện diện. Không chạy macro nếu chưa được chính sách tổ chức cho phép.
+```powershell
+dotnet run --project tests\ToolVba.IntegrationRunner\ToolVba.IntegrationRunner.csproj -- --selftest D:\Temp\tool-vba-selftest
+```
 
-## Test case TV-REAL-002: tên module trùng
+Các ca của cổng bản quyền khi mở và đóng file nằm ở [LicenseGateSmokeTest.md](LicenseGateSmokeTest.md); kích hoạt máy nằm ở [DeviceCodeActivationSmokeTest.md](DeviceCodeActivationSmokeTest.md).
 
-1. Dùng một workbook `.xlsm` test có component mang tên `ToolVbaSmokeTest`.
-2. Chạy chế độ thêm module với fixture và chọn output mới.
-3. Kỳ vọng tool từ chối trước khi import; không component cũ nào bị thay; input không đổi; output không được tạo; file tạm được dọn.
+## Đóng gói
 
-## Test case TV-REAL-005: thêm module trực tiếp vào `.xlsx`
+| ID | Thao tác | Kỳ vọng |
+| --- | --- | --- |
+| TV-01 | Thả một file `.xlsx` có hai sheet, dán mã đóng gói `test-01` `1.0.0`, bấm **Tạo file có bản quyền** | Tạo `test-01_1.0.0_ban-quyen.xlsm` cạnh file gốc. Sheet đầu là "Huong dan" và hiện; sheet kia `xlSheetVeryHidden`. Module `modLicenseApiV1` có `Cfg_ProductKey = "test-01"`, `Cfg_ProductVersion = "1.0.0"`, `Cfg_ProtectedSheetNames` chứa sheet kia. Báo "Xong!" kèm phiên bản gói. |
+| TV-02 | Tạo lại cùng file và cùng mã | Kết quả mới là `test-01_1.0.0_ban-quyen (2).xlsm`; file trước không bị ghi đè. |
+| TV-03 | Bấm **Đổi nơi lưu**, chọn thư mục khác, Tạo | Kết quả nằm ở thư mục đã chọn. **Lưu cạnh file gốc** đưa về mặc định. |
+| TV-04 | Thả hai file cùng lúc; thả một file `.xls` | Hai file: app lấy file đầu và báo "Mỗi lần chỉ đóng gói một file…". `.xls`: báo "Chỉ nhận file Excel .xlsx hoặc .xlsm." |
+| TV-05 | `.xlsm` có module nhân viên tự viết và module trùng tên với gói | Module trùng được thay bằng bản mới. Module nhân viên giữ nguyên. Module bản gói cũ nay đã bỏ bị gỡ. |
+| TV-06 | Mở kết quả, Alt+F11 xem ThisWorkbook | Đúng một vùng `'=== tool-vba BEGIN … ===` cho từng loại; code ngoài vùng giữ nguyên. Thuộc tính `ToolVba.PackageVersion` bằng phiên bản trên chip. |
+| TV-07 | File có sẵn `Workbook_Open` ngoài vùng, gói cũng có `Workbook_Open` | App dừng, nêu tên thủ tục trùng, không tạo file. |
+| TV-08 | Excel tiếng Việt (module `SổlàmviệcNày`) | Module được đổi tên `ThisWorkbook`; sự kiện workbook chạy sau khi lưu. |
+| TV-09 | Tắt "Trust access to the VBA project object model", mở app | Báo "Excel chưa cho phép…". **Bật giúp tôi** → hộp xác nhận → "Đã bật". Đóng/mở app: vẫn bật. |
+| TV-10 | Đặt policy `AccessVBOM` (VM) rồi bấm **Bật giúp tôi** | Chỉ báo liên hệ IT, không ghi Registry. |
+| TV-11 | Đã có gói trong cache, ngắt mạng, mở app và Tạo | Báo "Không kết nối được máy chủ. Đang dùng code VBA đã lưu v…"; Tạo vẫn chạy. |
+| TV-12 | Ngắt mạng, sửa một byte file zip trong `%LocalAppData%\ToolVba\vba\<phiên bản>\` | App bỏ gói đó (sai SHA-256/chữ ký), báo cần kết nối mạng để tải code VBA, không dán code. Có mạng lại thì tải gói sạch. |
+| TV-13 | Phát hành bản app mới hơn trên Admin web, mở app cũ | Banner "Có phiên bản ứng dụng mới". **Cập nhật ngay** → app tự cài, mở lại đúng phiên bản. |
+| TV-14 | Xuất bản gói có "Bản ứng dụng tối thiểu" cao hơn app | Nút Tạo bị chặn, yêu cầu cập nhật. |
+| TV-15 | Admin web: **Kích hoạt lại** bản gói trước, rồi Tạo | Chip và file kết quả dùng bản gói vừa kích hoạt lại. |
 
-1. Chọn `Tạo hồ sơ.xlsx`, module `.bas`, manifest và một output mới `.xlsm` trong chế độ “Thêm module .bas”.
-2. Kỳ vọng Excel chỉ mở bản tạm với macro bị vô hiệu, import module và lưu bản tạm thành `.xlsm`.
-3. Xác nhận output có VBA Project và module mới; dữ liệu trang tính vẫn mở được; SHA-256 của `.xlsx` nguồn không đổi.
+## Mã đóng gói và sản phẩm
 
-## Test case TV-REAL-003: Excel không cho truy cập VBA Project
+| ID | Thao tác | Kỳ vọng |
+| --- | --- | --- |
+| TV-16 | Dán chuỗi không phải mã đóng gói (văn bản tự do, JSON thiếu `version`, JSON có trường thừa). Làm thêm: dán mã đúng, rồi dán đè một mã sai | Báo "Mã đóng gói không đúng…" kèm cách lấy mã trên Admin web. Nút Tạo bị chặn, kể cả khi hai ô còn giá trị của mã đúng trước đó. Không tạo file. |
+| TV-17 | Nhập tay phiên bản `1.0` hoặc `v1.0.0`; nhập tay `productKey` có ký tự lạ (khoảng trắng giữa chừng, `_`, dấu) ; nhập `Test-01` | Hai ca đầu báo lỗi định dạng, không tạo file. `Test-01` được chấp nhận và đổi thành `test-01` (cửa hàng cũng đổi chữ hoa thành chữ thường). |
+| TV-18 | Dán mã đúng, rồi sửa tay ô `productKey` hoặc phiên bản | App dùng giá trị đang hiển thị trong hai ô; tên file kết quả và `Cfg_ProductKey`/`Cfg_ProductVersion` khớp giá trị đó. |
 
-1. Trên máy test chưa được cấp quyền VBA Project Object Model theo chính sách, chọn workbook `.xlsm` và module fixture.
-2. Kỳ vọng tool báo cần quản trị viên cấu hình Excel, không tự sửa Registry/Trust Center, không chạy macro, giữ nguyên input/output.
+## Từ chối an toàn (không tạo file, file nguồn không đổi)
 
-## Test case TV-REAL-004: project binary mode không ghép module
+| ID | File nguồn | Kỳ vọng |
+| --- | --- | --- |
+| TV-19 | Có module riêng với `Public Sub Auto_Open()` | Nêu tên module và lý do (module bản quyền dùng `Auto_Open`). |
+| TV-20 | `Workbook_BeforeClose` có `Exit Sub`, `Exit Function` hoặc `End` | Nêu tên thủ tục và lý do (lời gọi cuối thủ tục có thể không chạy). |
+| TV-21 | Workbook đang khóa cấu trúc (Review › Protect Workbook) | Hướng dẫn bỏ khóa cấu trúc trong file gốc. |
+| TV-22 | Có chart sheet | Nêu tên sheet; module chỉ ẩn được worksheet. |
+| TV-23 | Đã có sheet tên "Huong dan" do người dùng tạo | Hướng dẫn đổi tên sheet đó. |
+| TV-24 | Chỉ có sheet "Huong dan", không còn sheet nào khác | Báo cần ít nhất một sheet ngoài sheet hướng dẫn. |
+| TV-25 | Có module ngoài gói định nghĩa `Cfg_ProductKey` hoặc `License_*` | Từ chối vì có bản cũ của module bản quyền. |
 
-1. Dùng một workbook `.xlsm` disposable có project VBA và một binary test.
-2. Không chọn xác nhận thay project. Kỳ vọng từ chối và input/output giữ nguyên.
-3. Chỉ xác nhận thay toàn bộ khi binary đã chứa mọi component cần giữ; không dùng binary chỉ có module test cho workbook có VBA gốc.
+## Ghép sự kiện
 
-## Giới hạn kiểm thử ở môi trường hiện tại
+| ID | File nguồn | Kỳ vọng |
+| --- | --- | --- |
+| TV-26 | ThisWorkbook đã có `Workbook_BeforeSave` và `Workbook_AfterSave` | Lời gọi bản quyền nằm **đầu** từng thủ tục giữa hai dòng `'=== tool-vba BEGIN/END license hook … ===`; code của sản phẩm giữ nguyên. |
+| TV-27 | ThisWorkbook đã có `Workbook_BeforeClose` không có `Exit` | Lời gọi nằm **cuối** thủ tục, dạng `If Not Cancel And (ThisWorkbook.Saved) Then …`. Mở kết quả, trả lời Không ở hộp của sản phẩm: sheet và quyền không đổi (xem thêm LicenseGateSmokeTest). |
+| TV-28 | ThisWorkbook chưa có ba thủ tục trên | Thủ tục của gói nằm trong vùng đánh dấu; mở kết quả không báo lỗi biên dịch. |
 
-Test tự động chạy được với fixture tổng hợp. Trên phiên máy hiện tại, Excel COM chưa khởi động được nên vẫn cần chạy các test thủ công trên máy đóng gói có phiên Excel hoạt động và quyền VBA Project Object Model đã được quản trị viên cấu hình. Không dùng file nguồn làm output.
+Ghi kết quả: ID, phiên bản app, phiên bản gói, PASS/FAIL, lý do. Không ghi nội dung workbook hay code VBA.

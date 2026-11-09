@@ -4,9 +4,10 @@ using System.Text;
 namespace ToolVba.Core;
 
 /// <summary>
-/// Pastes the company VBA package into a copy of a workbook. The source file is never modified:
-/// Excel works on a temporary copy with macros disabled, the saved copy is reopened and checked,
-/// and only then is it moved to the output path.
+/// Packages a product: pastes the company VBA package, with its licensing module filled for the chosen
+/// store product, into a copy of a workbook, adds the guide sheet and protects every other sheet
+/// (DEC-112, DEC-115). The source file is never modified: Excel works on a temporary copy with macros
+/// disabled, the saved copy is reopened and checked, and only then is it moved to the output path.
 /// </summary>
 public sealed class VbaPackageInstallService(
     IVbaWorkbookHost? excel = null,
@@ -50,16 +51,19 @@ public sealed class VbaPackageInstallService(
             progress?.Report(new("Đang chuẩn bị bản tạm và code VBA.", 10));
             var package = work.StagePackage(request.Package, _reader);
             if (package is null) return VbaPackageInstallResult.Failure("Gói code VBA thay đổi trong lúc chuẩn bị. Hãy thử lại.");
+            var (licenseModule, licenseError) = LicensePackaging.FindLicenseModule(package);
+            if (licenseModule is null) return VbaPackageInstallResult.Failure(licenseError!);
             var inputHash = HashFile(paths.Input);
             File.Copy(paths.Input, work.TempPath, overwrite: false);
 
             ct.ThrowIfCancellationRequested();
             progress?.Report(new("Đang mở bản tạm trong Excel với macro bị vô hiệu.", 30));
-            var (outcome, applyError) = Apply(work, package, inspection.HasVbaProject, progress, ct);
+            var target = new ApplyTarget(work, package, licenseModule, request.Product, inspection.HasVbaProject);
+            var (outcome, applyError) = Apply(target, progress, ct);
             if (outcome is null) return VbaPackageInstallResult.Failure(applyError! + " File nguồn không bị sửa.");
 
             ct.ThrowIfCancellationRequested();
-            progress?.Report(new("Đang mở lại bản tạm để xác nhận code VBA đã lưu.", 70));
+            progress?.Report(new("Đang mở lại bản tạm để xác nhận code VBA và sheet đã lưu.", 70));
             var verifyError = VerifySaved(work.SavedPath, package, outcome);
             if (verifyError is not null) return VbaPackageInstallResult.Failure(verifyError + " Bản tạm đã bị loại bỏ; file nguồn không bị sửa.");
 
@@ -93,14 +97,21 @@ public sealed class VbaPackageInstallService(
 
     private const string WorkbookModuleName = "ThisWorkbook";
 
-    private sealed record ApplyOutcome(VbaInstallPlan Plan, IReadOnlyList<string> WrittenDocuments);
+    private sealed record ApplyTarget(
+        InstallWorkArea Work, VbaPackage Package, VbaPackageComponentFile LicenseModule, LicenseProduct Product, bool SourceHadVbaProject);
 
-    private (ApplyOutcome? Outcome, string? Error) Apply(
-        InstallWorkArea work, VbaPackage package, bool sourceHadVbaProject, IProgress<VbaInstallProgress>? progress, CancellationToken ct)
+    private sealed record ApplyOutcome(VbaInstallPlan Plan, IReadOnlyList<string> WrittenDocuments, LicenseSetup License);
+
+    private (ApplyOutcome? Outcome, string? Error) Apply(ApplyTarget target, IProgress<VbaInstallProgress>? progress, CancellationToken ct)
     {
-        using var session = _excel.Open(work.TempPath, readOnly: false);
-        var (plan, planError) = VbaInstallPlan.Create(NormalizeWorkbookModuleName(session), ManagedComponentList.Read(session), package, sourceHadVbaProject);
+        using var session = _excel.Open(target.Work.TempPath, readOnly: false);
+        var components = NormalizeWorkbookModuleName(session);
+        var (plan, planError) = VbaInstallPlan.Create(components, ManagedComponentList.Read(session), target.Package, target.SourceHadVbaProject);
         if (plan is null) return (null, planError);
+        var foreign = LicensePackaging.FindForeignLicensingCode(session, components, plan.ComponentsToRemove);
+        if (foreign is not null) return (null, foreign);
+        var (license, licenseError) = LicensePackaging.Prepare(session, target.LicenseModule, target.Product, target.Work.LicenseDirectory);
+        if (license is null) return (null, licenseError);
         var (merges, mergeError) = MergeDocuments(session, plan);
         if (merges is null) return (null, mergeError);
 
@@ -108,23 +119,27 @@ public sealed class VbaPackageInstallService(
         progress?.Report(new("Đang thay module cũ bằng code mới.", 45));
         foreach (var name in plan.ComponentsToRemove)
             session.RemoveComponent(name);
-        foreach (var component in package.CodeModules)
+        foreach (var component in target.Package.CodeModules)
         {
-            var imported = session.ImportComponent(component.FilePath);
+            var file = string.Equals(component.Name, license.Module.Name, StringComparison.OrdinalIgnoreCase)
+                ? license.ConfiguredPath
+                : component.FilePath;
+            var imported = session.ImportComponent(file);
             if (!string.Equals(imported, component.Name, StringComparison.OrdinalIgnoreCase))
                 return (null, $"Excel đặt tên '{imported}' cho module {component.Name} (có thể do trùng tên).");
         }
 
-        progress?.Report(new("Đang dán code vào ThisWorkbook và sheet.", 55));
-        foreach (var (target, code) in merges)
-            session.SetDocumentCode(target, code);
-        ManagedComponentList.Write(session, package.CodeModules.Select(c => c.Name), package.Version);
+        progress?.Report(new("Đang dán code vào ThisWorkbook, thêm sheet hướng dẫn và ẩn các sheet khác.", 55));
+        foreach (var (document, code) in merges)
+            session.SetDocumentCode(document, code);
+        ManagedComponentList.Write(session, target.Package.CodeModules.Select(c => c.Name), target.Package.Version);
+        LicensePackaging.ApplySheets(session, license);
 
-        var missing = MissingComponents(session.GetComponents(), package, plan);
+        var missing = MissingComponents(session.GetComponents(), target.Package, plan);
         if (missing.Count > 0) return (null, "Không xác nhận được code VBA sau khi dán. Thiếu: " + string.Join(", ", missing) + ".");
-        if (work.ConvertsToMacroEnabled) session.SaveAsMacroEnabled(work.SavedPath);
+        if (target.Work.ConvertsToMacroEnabled) session.SaveAsMacroEnabled(target.Work.SavedPath);
         else session.Save();
-        return (new(plan, merges.Select(m => m.Target).ToList()), null);
+        return (new(plan, merges.Select(m => m.Target).ToList(), license), null);
     }
 
     /// <summary>
@@ -153,7 +168,10 @@ public sealed class VbaPackageInstallService(
             if (DocumentModuleMerger.IsEffectivelyEmpty(packageCode)) continue;
             var merged = DocumentModuleMerger.Merge(session.GetDocumentCode(document.TargetName), packageCode);
             if (!merged.Succeeded)
-                return (null, $"{document.TargetName}: {merged.Error} Hãy đổi tên hoặc xóa phần code trùng trong file Excel rồi thử lại.");
+                // Renaming or removing is the remedy for a duplicate name only; other errors carry their own advice.
+                return (null, merged.ConflictingNames.Count > 0
+                    ? $"{document.TargetName}: {merged.Error} Hãy đổi tên hoặc xóa phần code trùng trong file Excel rồi thử lại."
+                    : $"{document.TargetName}: {merged.Error}");
             merges.Add((document.TargetName, merged.Code!));
         }
         return (merges, null);
@@ -172,9 +190,9 @@ public sealed class VbaPackageInstallService(
                 !DocumentModuleMerger.ContainsManagedCode(session.GetDocumentCode(target)))
                 return $"Code của {target} chưa được lưu.";
         }
-        return session.GetCustomProperty(ManagedComponentList.VersionProperty) == package.Version
-            ? null
-            : "Không ghi được phiên bản code VBA vào file.";
+        if (session.GetCustomProperty(ManagedComponentList.VersionProperty) != package.Version)
+            return "Không ghi được phiên bản code VBA vào file.";
+        return LicensePackaging.VerifySaved(session, outcome.License);
     }
 
     private static List<string> MissingComponents(IReadOnlyList<VbaComponentInfo> components, VbaPackage package, VbaInstallPlan plan)

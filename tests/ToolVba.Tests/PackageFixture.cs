@@ -25,8 +25,18 @@ internal static class PackageFixture
 
     public const string WorkbookCode = "Option Explicit\r\n\r\nPrivate Sub Workbook_Open()\r\n    modReport.Prepare\r\nEnd Sub\r\n";
 
+    /// <summary>A stand-in for modLicenseApiV1: only the three per-product settings the app fills.</summary>
+    public const string LicenseModuleName = "modLicenseApiV1";
+
+    public static readonly string LicenseModuleSource = StandardSource(LicenseModuleName,
+        "Public Function Cfg_ProductKey() As String\r\n    Cfg_ProductKey = vbNullString\r\nEnd Function\r\n" +
+        "Public Function Cfg_ProductVersion() As String\r\n    Cfg_ProductVersion = vbNullString\r\nEnd Function\r\n" +
+        "Public Function Cfg_ProtectedSheetNames() As Variant\r\n    Cfg_ProtectedSheetNames = Array()\r\nEnd Function\r\n" +
+        "Public Sub Auto_Open()\r\nEnd Sub\r\n");
+
     /// <summary>Writes staged component files and builds a package with the production builder.</summary>
-    public static string BuildPackage(TestDirectory temp, string zipName = "package.zip", bool includeForm = true, bool includeWorkbook = true)
+    public static string BuildPackage(TestDirectory temp, string zipName = "package.zip", bool includeForm = true, bool includeWorkbook = true,
+        bool includeLicense = false)
     {
         var staging = Directory.CreateDirectory(temp.PathFor("staging-" + Guid.NewGuid().ToString("N"))).FullName;
         var sources = new List<VbaPackageSource>
@@ -34,6 +44,8 @@ internal static class PackageFixture
             new("modReport", VbaComponentKind.Standard, WriteAnsi(staging, "modReport.bas", StandardSource("modReport", "Public Sub Prepare()\r\nEnd Sub\r\n"))),
             new("clsRow", VbaComponentKind.Class, WriteAnsi(staging, "clsRow.cls", ClassSource("clsRow")))
         };
+        if (includeLicense)
+            sources.Add(new(LicenseModuleName, VbaComponentKind.Standard, WriteAnsi(staging, LicenseModuleName + ".bas", LicenseModuleSource)));
         if (includeForm)
         {
             var form = WriteAnsi(staging, "frmInput.frm", FormSource("frmInput"));

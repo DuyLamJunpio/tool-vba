@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="{Binding WindowTitle}"
-        Width="980" Height="760" MinWidth="720" MinHeight="600"
+        Width="980" Height="800" MinWidth="720" MinHeight="640"
         WindowStartupLocation="CenterScreen" Background="{StaticResource Canvas}"
         AllowDrop="True" DragEnter="OnDragEnter" DragOver="OnDragOver" DragLeave="OnDragLeave" Drop="OnDrop">
   <Window.Resources>
@@ -35,6 +35,17 @@
       <Setter Property="Padding" Value="16,12" />
       <Setter Property="Margin" Value="0,0,0,10" />
     </Style>
+    <Style x:Key="FieldLabel" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12.5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Margin" Value="0,0,0,4" />
+    </Style>
+    <Style x:Key="Field" TargetType="TextBox">
+      <Setter Property="Padding" Value="8,6" />
+      <Setter Property="FontSize" Value="13.5" />
+      <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+      <Setter Property="IsEnabled" Value="{Binding IsIdle}" />
+    </Style>
   </Window.Resources>
 
   <Grid Margin="32,24,32,16">
@@ -53,8 +64,8 @@
         <ColumnDefinition Width="Auto" />
       </Grid.ColumnDefinitions>
       <StackPanel>
-        <TextBlock Text="Đóng gói VBA cho Excel" FontSize="28" FontWeight="SemiBold" />
-        <TextBlock Text="Thả file Excel vào và bấm Tạo. Code VBA mới nhất của công ty được dán tự động; file gốc không bị sửa."
+        <TextBlock Text="Đóng gói bản quyền cho sản phẩm Excel" FontSize="28" FontWeight="SemiBold" />
+        <TextBlock Text="Thả file sản phẩm, nhập sản phẩm trên cửa hàng rồi bấm Tạo. App gắn module bản quyền, thêm sheet hướng dẫn và ẩn các sheet khác; file gốc không bị sửa."
                    Foreground="{StaticResource Muted}" FontSize="13.5" TextWrapping="Wrap" Margin="0,4,0,0" />
       </StackPanel>
       <Border Grid.Column="1" CornerRadius="14" Padding="12,7" VerticalAlignment="Top" Margin="16,4,0,0" MaxWidth="360">
@@ -125,7 +136,8 @@
     <Border Grid.Row="2" Background="White" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="9" Padding="20">
       <Grid>
         <Grid.RowDefinitions>
-          <RowDefinition Height="*" />
+          <RowDefinition Height="*" MinHeight="120" />
+          <RowDefinition Height="Auto" />
           <RowDefinition Height="Auto" />
           <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -136,7 +148,7 @@
             <Style TargetType="Grid">
               <Setter Property="Visibility" Value="Visible" />
               <Style.Triggers>
-                <DataTrigger Binding="{Binding HasFiles}" Value="True">
+                <DataTrigger Binding="{Binding HasFile}" Value="True">
                   <Setter Property="Visibility" Value="Collapsed" />
                 </DataTrigger>
               </Style.Triggers>
@@ -145,81 +157,101 @@
           <Rectangle Stroke="{StaticResource Line}" StrokeThickness="2" StrokeDashArray="5 4" RadiusX="9" RadiusY="9" Fill="{StaticResource SurfaceSoft}" />
           <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24">
             <TextBlock Text="⬇" FontSize="40" HorizontalAlignment="Center" Foreground="{StaticResource Accent}" />
-            <TextBlock Text="Kéo thả file Excel (.xlsx / .xlsm) vào đây" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,4" />
-            <TextBlock Text="Có thể thả nhiều file cùng lúc" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,0,0,14" />
+            <TextBlock Text="Kéo thả file Excel sản phẩm (.xlsx / .xlsm) vào đây" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,4" />
+            <TextBlock Text="Mỗi lần một file cho một sản phẩm" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,0,0,14" />
             <Button Content="Chọn file…" Command="{Binding BrowseCommand}" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Center" />
           </StackPanel>
         </Grid>
 
-        <!-- File list -->
-        <DockPanel Visibility="{Binding HasFiles, Converter={StaticResource BoolToVisibility}}">
-          <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
-            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
-              <Button Content="Thêm file…" Command="{Binding BrowseCommand}" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" />
-              <Button Content="Xóa danh sách" Command="{Binding ClearCommand}" Style="{StaticResource SecondaryButton}" />
+        <!-- The chosen file -->
+        <Border VerticalAlignment="Top" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="7" Padding="14,12"
+                Visibility="{Binding HasFile, Converter={StaticResource BoolToVisibility}}">
+          <Grid DataContext="{Binding Workbook}">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+              <TextBlock FontSize="14" TextTrimming="CharacterEllipsis">
+                <Run Text="{Binding FileName, Mode=OneWay}" FontWeight="SemiBold" />
+                <Run Text="{Binding SizeText, Mode=OneWay}" Foreground="{StaticResource Muted}" FontSize="12" />
+              </TextBlock>
+              <TextBlock Foreground="{StaticResource Muted}" FontSize="12.5" TextTrimming="CharacterEllipsis" Margin="0,2,0,0">
+                <Run Text="→" />
+                <Run Text="{Binding OutputName, Mode=OneWay}" />
+              </TextBlock>
+              <TextBlock Text="{Binding Message}" Foreground="{StaticResource DangerInk}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock">
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding Message}" Value="{x:Null}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+              </TextBlock>
             </StackPanel>
-            <TextBlock Text="File sẽ được dán code VBA" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
-          </DockPanel>
-          <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <ItemsControl ItemsSource="{Binding Files}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                  <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="4,10">
-                    <Grid>
-                      <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                      </Grid.ColumnDefinitions>
-                      <StackPanel>
-                        <TextBlock FontSize="14" TextTrimming="CharacterEllipsis">
-                          <Run Text="{Binding FileName, Mode=OneWay}" FontWeight="SemiBold" />
-                          <Run Text="{Binding SizeText, Mode=OneWay}" Foreground="{StaticResource Muted}" FontSize="12" />
-                        </TextBlock>
-                        <TextBlock Foreground="{StaticResource Muted}" FontSize="12.5" TextTrimming="CharacterEllipsis" Margin="0,2,0,0">
-                          <Run Text="→" />
-                          <Run Text="{Binding OutputName, Mode=OneWay}" />
-                        </TextBlock>
-                        <TextBlock Text="{Binding Message}" Foreground="{StaticResource DangerInk}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0">
-                          <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                              <Style.Triggers>
-                                <DataTrigger Binding="{Binding Message}" Value="{x:Null}">
-                                  <Setter Property="Visibility" Value="Collapsed" />
-                                </DataTrigger>
-                              </Style.Triggers>
-                            </Style>
-                          </TextBlock.Style>
-                        </TextBlock>
-                      </StackPanel>
-                      <Border Grid.Column="1" CornerRadius="10" Padding="10,3" VerticalAlignment="Top" Margin="12,0,8,0">
-                        <Border.Style>
-                          <Style TargetType="Border">
-                            <Setter Property="Background" Value="{StaticResource SurfaceSoft}" />
-                            <Style.Triggers>
-                              <DataTrigger Binding="{Binding State}" Value="Done">
-                                <Setter Property="Background" Value="{StaticResource AccentSoft}" />
-                              </DataTrigger>
-                              <DataTrigger Binding="{Binding State}" Value="Failed">
-                                <Setter Property="Background" Value="{StaticResource DangerSoft}" />
-                              </DataTrigger>
-                            </Style.Triggers>
-                          </Style>
-                        </Border.Style>
-                        <TextBlock Text="{Binding StateText}" FontSize="12" FontWeight="SemiBold" />
-                      </Border>
-                      <Button Grid.Column="2" Content="✕" Command="{Binding RemoveCommand}" ToolTip="Bỏ file này khỏi danh sách"
-                              VerticalAlignment="Top" Padding="8,2" Background="Transparent" BorderThickness="0" Foreground="{StaticResource Muted}" />
-                    </Grid>
-                  </Border>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </ScrollViewer>
-        </DockPanel>
+            <Border Grid.Column="1" CornerRadius="10" Padding="10,3" VerticalAlignment="Top" Margin="12,0,8,0">
+              <Border.Style>
+                <Style TargetType="Border">
+                  <Setter Property="Background" Value="{StaticResource SurfaceSoft}" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding State}" Value="Done">
+                      <Setter Property="Background" Value="{StaticResource AccentSoft}" />
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding State}" Value="Failed">
+                      <Setter Property="Background" Value="{StaticResource DangerSoft}" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Border.Style>
+              <TextBlock Text="{Binding StateText}" FontSize="12" FontWeight="SemiBold" />
+            </Border>
+            <Button Grid.Column="2" Content="Đổi file…" Command="{Binding DataContext.BrowseCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                    Style="{StaticResource SecondaryButton}" VerticalAlignment="Top" Padding="10,4" />
+          </Grid>
+        </Border>
+
+        <!-- Store product -->
+        <StackPanel Grid.Row="1" Margin="0,18,0,0">
+          <TextBlock Text="Sản phẩm trên cửa hàng" FontSize="15" FontWeight="SemiBold" />
+          <TextBlock Text="Dán mã đóng gói (Admin web › Sản phẩm › Phiên bản › Sao chép mã đóng gói), hoặc nhập tay mã sản phẩm và phiên bản."
+                     Foreground="{StaticResource Muted}" FontSize="12.5" TextWrapping="Wrap" Margin="0,2,0,10" />
+          <TextBlock Text="Mã đóng gói" Style="{StaticResource FieldLabel}" />
+          <TextBox Text="{Binding Product.PackagingCodeText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Field}"
+                   FontFamily="Consolas" ToolTip='Ví dụ: {"productKey":"test-01","version":"1.0.0"}' />
+          <Grid Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="2*" />
+              <ColumnDefinition Width="16" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+              <TextBlock Text="Mã sản phẩm (productKey)" Style="{StaticResource FieldLabel}" />
+              <TextBox Text="{Binding Product.ProductKeyText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Field}" />
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+              <TextBlock Text="Phiên bản (x.y.z)" Style="{StaticResource FieldLabel}" />
+              <TextBox Text="{Binding Product.VersionText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Field}" />
+            </StackPanel>
+          </Grid>
+          <TextBlock Text="{Binding Product.Error}" Foreground="{StaticResource DangerInk}" FontSize="12.5" TextWrapping="Wrap" Margin="0,6,0,0">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Product.Error}" Value="{x:Null}">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
+        </StackPanel>
 
         <!-- Output folder -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,14,0,12">
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,14,0,12">
           <TextBlock Text="Nơi lưu: " Foreground="{StaticResource Muted}" FontSize="12.5" />
           <TextBlock Text="{Binding OutputFolderText}" FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" MaxWidth="460" />
           <Button Content="Đổi nơi lưu" Command="{Binding ChangeOutputFolderCommand}" Style="{StaticResource LinkButton}" Margin="12,0,0,0" />
@@ -227,7 +259,7 @@
                   Visibility="{Binding HasCustomOutputFolder, Converter={StaticResource BoolToVisibility}}" />
         </StackPanel>
 
-        <Button Grid.Row="2" Content="{Binding CreateButtonText}" Command="{Binding CreateCommand}"
+        <Button Grid.Row="3" Content="Tạo file có bản quyền" Command="{Binding CreateCommand}"
                 Style="{StaticResource PrimaryButton}" HorizontalAlignment="Stretch" Padding="16,14" FontSize="16" />
       </Grid>
     </Border>
@@ -295,7 +327,7 @@
     <!-- Drag overlay -->
     <Border x:Name="DropOverlay" Grid.RowSpan="5" Background="#CCEDF3EC" BorderBrush="{StaticResource Accent}" BorderThickness="3"
             CornerRadius="12" Visibility="Collapsed" IsHitTestVisible="False">
-      <TextBlock Text="Thả file Excel để thêm vào danh sách" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource Accent}"
+      <TextBlock Text="Thả file Excel sản phẩm vào đây" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource Accent}"
                  HorizontalAlignment="Center" VerticalAlignment="Center" />
     </Border>
   </Grid>

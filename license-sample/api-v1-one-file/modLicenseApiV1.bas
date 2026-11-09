@@ -50,6 +50,13 @@ Private Type PROXY_INFO
     proxyBypass As LongPtr
 End Type
 
+Private Declare PtrSafe Function ClipOpen Lib "user32" Alias "OpenClipboard" (ByVal hwnd As LongPtr) As Long
+Private Declare PtrSafe Function ClipEmpty Lib "user32" Alias "EmptyClipboard" () As Long
+Private Declare PtrSafe Function ClipClose Lib "user32" Alias "CloseClipboard" () As Long
+Private Declare PtrSafe Function ClipSetData Lib "user32" Alias "SetClipboardData" (ByVal wFormat As Long, ByVal hMem As LongPtr) As LongPtr
+Private Declare PtrSafe Function ClipGlobalAlloc Lib "kernel32" Alias "GlobalAlloc" (ByVal wFlags As Long, ByVal dwBytes As LongPtr) As LongPtr
+Private Declare PtrSafe Function ClipGlobalLock Lib "kernel32" Alias "GlobalLock" (ByVal hMem As LongPtr) As LongPtr
+Private Declare PtrSafe Function ClipGlobalUnlock Lib "kernel32" Alias "GlobalUnlock" (ByVal hMem As LongPtr) As Long
 Private Declare PtrSafe Sub GetSystemTime Lib "kernel32" (ByRef value As SYSTEMTIME)
 Private Declare PtrSafe Function CoCreateGuid Lib "ole32.dll" (ByRef value As GUID_VALUE) As Long
 Private Declare PtrSafe Function WideCharToMultiByte Lib "kernel32" ( _
@@ -148,9 +155,44 @@ Private mHardDenied As Boolean
 Private mClosing As Boolean
 Private mHadAllowedSession As Boolean
 
+' One cache slot per product: products sharing a slot would overwrite each other's activation.
+Private Function CacheSection() As String
+    CacheSection = CACHE_SECTION & "_" & Cfg_ProductKey()
+End Function
+
+' Puts the one-time user code on the clipboard so the customer can paste it (Ctrl+V).
+' Only the short user code is copied; never a device code, token or fingerprint.
+Private Function CopyTextToClipboard(ByVal text As String) As Boolean
+    Const CF_UNICODETEXT As Long = 13
+    Const GHND As Long = &H42
+    Dim hMem As LongPtr
+    Dim pMem As LongPtr
+    If Len(text) = 0 Then Exit Function
+    hMem = ClipGlobalAlloc(GHND, (Len(text) + 1) * 2)
+    If hMem = 0 Then Exit Function
+    pMem = ClipGlobalLock(hMem)
+    If pMem = 0 Then
+        GlobalFree hMem
+        Exit Function
+    End If
+    CopyMemory pMem, StrPtr(text), Len(text) * 2
+    ClipGlobalUnlock hMem
+    If ClipOpen(0) = 0 Then
+        GlobalFree hMem
+        Exit Function
+    End If
+    ClipEmpty
+    If ClipSetData(CF_UNICODETEXT, hMem) = 0 Then
+        GlobalFree hMem
+    Else
+        CopyTextToClipboard = True
+    End If
+    ClipClose
+End Function
+
 Public Function Cfg_ApiBaseUrl() As String
     ' Example shape after deployment: https://host.example/api/v1
-    Cfg_ApiBaseUrl = vbNullString
+    Cfg_ApiBaseUrl = "https://shop.sunprime.vn/api/v1"
 End Function
 
 Public Function Cfg_ProductKey() As String
@@ -165,13 +207,13 @@ End Function
 
 Public Function Cfg_ActivationKeyIds() As Variant
     ' Active/previous key IDs. Configure the second pair only during rotation.
-    Cfg_ActivationKeyIds = Array("k2026-10", vbNullString)
+    Cfg_ActivationKeyIds = Array("k-d7b49d36a6111497", vbNullString)
 End Function
 
 Public Function Cfg_ActivationPublicKeysBase64() As Variant
     ' Raw 32-byte public key as standard Base64; never a private key.
     Cfg_ActivationPublicKeysBase64 = Array( _
-        "iCNGgbXlaYmAsu5XJewI7h6935JuPaEnASEj8qvPGaI=", vbNullString)
+        "BdUaYauU+Te7xcYAb7ShcTlNUrQ47uRAsJqKboQm63s=", vbNullString)
 End Function
 
 Public Function Cfg_ProtectedSheetNames() As Variant
@@ -189,7 +231,7 @@ Public Function Cfg_ActivationWebUrl() As String
     ' Approved customer page for entering a one-time user code.
     ' Example shape only: https://shop.example/account/activate
     ' Never add a token, fingerprint or device code to this URL.
-    Cfg_ActivationWebUrl = vbNullString
+    Cfg_ActivationWebUrl = "https://shop.sunprime.vn/account/activate"
 End Function
 
 Public Function Cfg_ResolveTimeoutMs() As Long
@@ -228,7 +270,10 @@ CloseUnlicensed:
 End Sub
 
 Public Sub Auto_Close()
-    License_OnClose
+    ' Excel runs Auto_Close before its "Save changes?" prompt. With unsaved changes, wait:
+    ' Save hides the sheets in Workbook_BeforeSave, Don't Save keeps the saved (hidden) file,
+    ' and Cancel keeps the workbook open with its access (test CL-1, DEC-115 addendum 3).
+    If ThisWorkbook.Saved Then License_OnClose
 End Sub
 
 Public Function License_OnClose() As Boolean
@@ -302,10 +347,16 @@ Public Function License_ActivateWithDeviceCode() As Boolean
     End If
     expiresAt = UtcUnixNow() + expiresIn
 
-    If MsgBox("Ma kich hoat cho may nay: " & userCode & vbCrLf & _
+    Dim codeHint As String
+    If CopyTextToClipboard(userCode) Then
+        codeHint = "Ma da duoc sao chep san: tren trang web chi can bam Ctrl+V."
+    Else
+        codeHint = "Hay nhap ma nay tren trang web."
+    End If
+    If MsgBox("Ma kich hoat cho may nay: " & userCode & vbCrLf & codeHint & vbCrLf & vbCrLf & _
               "Chon Yes de mo trang dang nhap va xac nhan ma." & vbCrLf & _
-              "Chon No hoac X de dong workbook.", _
-              vbYesNoCancel + vbInformation, "Kich hoat giay phep") <> vbYes Then
+              "Chon No de dong workbook.", _
+              vbYesNo + vbInformation, "Kich hoat giay phep") <> vbYes Then
         mErrorCode = "ACTIVATION_CANCELLED"
         Exit Function
     End If
@@ -320,7 +371,8 @@ Public Function License_ActivateWithDeviceCode() As Boolean
         End If
 
         body = BuildDeviceCodeRedeemJson(deviceCode, fingerprint, _
-                                         NewRequestId(), UtcUnixNow())
+                                         NewRequestId(), UtcUnixNow(), _
+                                         SafeDeviceName(Environ$("COMPUTERNAME")))
         If Not ApiPost("/auth/device-code/redeem", body, vbNullString, _
                        statusCode, responseText) Then
             mErrorCode = "NETWORK_UNAVAILABLE"
@@ -903,15 +955,36 @@ End Function
 
 Private Function BuildDeviceCodeRedeemJson( _
     ByVal deviceCode As String, ByVal fingerprint As String, _
-    ByVal requestId As String, ByVal timestamp As Double) As String
+    ByVal requestId As String, ByVal timestamp As Double, _
+    Optional ByVal deviceName As String = vbNullString) As String
 
     If Not IsDeviceCode(deviceCode) Then Err.Raise 5
     If Not IsHex64(fingerprint) Then Err.Raise 5
+    deviceName = SafeDeviceName(deviceName)
     BuildDeviceCodeRedeemJson = _
         "{""device_code"":""" & deviceCode & _
         """,""fp_hash"":""" & fingerprint & _
         """,""request_id"":""" & requestId & _
-        """,""timestamp"":" & Format$(timestamp, "0") & "}"
+        """,""timestamp"":" & Format$(timestamp, "0")
+    If Len(deviceName) > 0 Then
+        BuildDeviceCodeRedeemJson = BuildDeviceCodeRedeemJson & _
+            ",""device_name"":""" & deviceName & """"
+    End If
+    BuildDeviceCodeRedeemJson = BuildDeviceCodeRedeemJson & "}"
+End Function
+
+' The Windows computer name lets the customer and the admin tell computers apart on the
+' store ("Thiet bi"). Only letters, digits, "-", "_" and "." are kept (so the value never needs
+' JSON escaping), at most 63 characters. It is a display label, never part of the fingerprint.
+Private Function SafeDeviceName(ByVal value As String) As String
+    Const MAX_DEVICE_NAME As Long = 63
+    Dim i As Long
+    Dim ch As String
+    For i = 1 To Len(value)
+        ch = Mid$(value, i, 1)
+        If ch Like "[A-Za-z0-9._-]" Then SafeDeviceName = SafeDeviceName & ch
+        If Len(SafeDeviceName) >= MAX_DEVICE_NAME Then Exit For
+    Next i
 End Function
 
 Private Function ApiPost( _
@@ -1781,8 +1854,8 @@ End Function
 
 Private Function CacheClear() As Boolean
     On Error GoTo Failed
-    If Len(GetSetting(CACHE_APP, CACHE_SECTION, "Ciphertext", vbNullString)) > 0 Then
-        DeleteSetting CACHE_APP, CACHE_SECTION
+    If Len(GetSetting(CACHE_APP, CacheSection(), "Ciphertext", vbNullString)) > 0 Then
+        DeleteSetting CACHE_APP, CacheSection()
     End If
     CacheClear = True
     Exit Function
@@ -1805,7 +1878,7 @@ Private Function CacheSave( _
                       Format$(validatedUnix, "0") & vbLf & Format$(maxSeenUnix, "0"))
     cipher = DpapiProtectHex(plain)
     If Len(cipher) = 0 Then Exit Function
-    SaveSetting CACHE_APP, CACHE_SECTION, "Ciphertext", cipher
+    SaveSetting CACHE_APP, CacheSection(), "Ciphertext", cipher
     mSavedMaxSeenUnix = maxSeenUnix
     CacheSave = True
     Exit Function
@@ -1825,7 +1898,7 @@ Private Function CacheLoad( _
     fingerprint = vbNullString
     validatedUnix = 0
     maxSeenUnix = 0
-    cipher = GetSetting(CACHE_APP, CACHE_SECTION, "Ciphertext", vbNullString)
+    cipher = GetSetting(CACHE_APP, CacheSection(), "Ciphertext", vbNullString)
     If Len(cipher) = 0 Then Exit Function
     plain = DpapiUnprotectHex(cipher)
     If ByteCount(plain) = 0 Then Exit Function
@@ -1998,7 +2071,12 @@ Public Sub License_RunMockTests()
     body = BuildDeviceCodeRedeemJson(String$(32, "A"), sampleFp, _
                                      sampleId, 1234567890#)
     If InStr(body, """device_code""") > 0 And _
-       InStr(body, """fp_hash""") > 0 Then countPassed = countPassed + 1
+       InStr(body, """fp_hash""") > 0 And _
+       InStr(body, "device_name") = 0 And _
+       InStr(BuildDeviceCodeRedeemJson(String$(32, "A"), sampleFp, sampleId, 1234567890#, _
+             "LAPTOP-GIANG"), ",""device_name"":""LAPTOP-GIANG""}") > 0 And _
+       SafeDeviceName("Ma""y {1}" & vbTab & String$(70, "x")) = "May1" & String$(59, "x") _
+       Then countPassed = countPassed + 1
     If Ed25519KnownAnswerTest() Then countPassed = countPassed + 1
     If Not PolicyCanUse(200#, 100#, 200#, 3600#) Then countPassed = countPassed + 1
     If Not PolicyCanUse(100#, 100#, 200#, 0#) Then countPassed = countPassed + 1
