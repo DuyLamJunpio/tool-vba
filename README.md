@@ -100,7 +100,7 @@ Hợp đồng API giữa app và máy chủ: [docs/tool-release-api-contract.md]
 .\scripts\build-app.ps1 -Version 1.0.1
 ```
 
-Script build bản self-contained win-x64, đóng gói bằng Velopack (có gói delta) và mở thư mục `out\release\upload`. Tải toàn bộ file trong thư mục đó lên Admin web: **Tải công cụ → Phát hành tool-vba → Phát hành ứng dụng**. Người dùng thấy banner "Có phiên bản ứng dụng mới" và bấm **Cập nhật ngay**.
+Script build bản win-x64 **không kèm .NET** (cả gói khoảng 16 MB), đóng gói bằng Velopack (có gói delta) và mở thư mục `out\release\upload`. Bộ cài tự tải .NET 10 Desktop Runtime từ Microsoft nếu máy chưa có, nên lần cài đầu cần mạng. Lý do: bản kèm .NET nặng khoảng 139 MB, vượt giới hạn 100 MB mỗi lần gửi của Cloudflare (DEC-117 ở repo API). Nếu báo "There is a release in channel win which is equal or greater", xóa `out\release\releases` (bản build cũ chưa tải lên) rồi chạy lại. Tải toàn bộ file trong thư mục đó lên Admin web: **Tải công cụ → Phát hành tool-vba → Phát hành ứng dụng**. Người dùng thấy banner "Có phiên bản ứng dụng mới" và bấm **Cập nhật ngay**.
 
 **Chuyển đổi:** ai đang dùng bản zip cũ cần chạy `ToolVba-win-Setup.exe` một lần; từ đó app tự cập nhật. Bản zip và thư mục `artifacts/` cũ đã gỡ khỏi repo ngày 09/11/2026 (vẫn còn trong lịch sử Git).
 
