@@ -102,7 +102,7 @@ Hợp đồng API giữa app và máy chủ: [docs/tool-release-api-contract.md]
 
 Script build bản self-contained win-x64, đóng gói bằng Velopack (có gói delta) và mở thư mục `out\release\upload`. Tải toàn bộ file trong thư mục đó lên Admin web: **Tải công cụ → Phát hành tool-vba → Phát hành ứng dụng**. Người dùng thấy banner "Có phiên bản ứng dụng mới" và bấm **Cập nhật ngay**.
 
-**Chuyển đổi:** ai đang dùng bản zip cũ cần chạy `ToolVba-win-Setup.exe` một lần; từ đó app tự cập nhật. Các file zip/artifact phân phối cũ sẽ bị xóa sau 1–2 tuần, khi kênh API đã chạy ổn.
+**Chuyển đổi:** ai đang dùng bản zip cũ cần chạy `ToolVba-win-Setup.exe` một lần; từ đó app tự cập nhật. Bản zip và thư mục `artifacts/` cũ đã gỡ khỏi repo ngày 09/11/2026 (vẫn còn trong lịch sử Git).
 
 **Chưa ký mã Authenticode:** dùng nội bộ, ít người, nên chưa mua chứng chỉ. Windows SmartScreen sẽ cảnh báo ở lần cài đầu.
 
@@ -110,7 +110,7 @@ Bản build không có `release.props` đã điền (chạy dev) vẫn mở đư
 
 ## Thứ tự deploy và kiểm thử production
 
-Danh sách việc cho chủ dự án, làm **đúng thứ tự** (DEC-115 mục 6: API deploy trước khi tải gói mẫu hoặc file sản phẩm có module bản quyền lên). Chưa làm bước nào trong số này tính đến 08/11/2026.
+Danh sách việc cho chủ dự án, làm **đúng thứ tự** (DEC-115 mục 6: API deploy trước khi tải gói mẫu hoặc file sản phẩm có module bản quyền lên). Bước 1 xong ngày 09/11/2026: API, Admin và Store chạy bản `0efd869`. File mẫu của bước 2 đã dựng, chưa tải lên. Các bước sau chưa làm.
 
 1. **Deploy API, Admin và Store** từ nhánh `phase/license-packaging` của `digital-license-api` (đã gồm `phase/device-management`: tên máy, trang Thiết bị, tab Khách hàng). Không có migration mới.
 2. **Tải file mẫu lên Admin web.** Chạy `.\scripts\build-license-template.ps1`, rồi ở **Tải công cụ → Phát hành tool-vba → Xuất bản code VBA** tải `out\license-template\license-template.xlsm` lên, bấm **Kiểm tra** (dryRun). Danh sách phải có module bản quyền `modLicenseApiV1`. Đúng thì bấm **Xuất bản**.
@@ -184,7 +184,7 @@ Kiểm thử tay: [tests/manual/WorkbookSmokeTest.md](tests/manual/WorkbookSmoke
 
 ## Trạng thái và việc tiếp theo
 
-Cập nhật 08/11/2026, nhánh `feat/license-packaging` (chưa push; làm cùng nhánh `phase/license-packaging` của `digital-license-api`, DEC-115).
+Cập nhật 09/11/2026, nhánh `feat/license-packaging` (đã push; làm cùng nhánh `phase/license-packaging` của `digital-license-api`, DEC-115).
 
 ### Đã có
 
@@ -192,8 +192,7 @@ Cập nhật 08/11/2026, nhánh `feat/license-packaging` (chưa push; làm cùng
 - Đóng gói bản quyền trong app (B1 đến B4): điền `productKey`/phiên bản/sheet bảo vệ, ghép sự kiện vào thủ tục có sẵn (`BeforeClose` đặt cuối), sheet "Huong dan", ẩn sheet khác, kiểm lại bản đã lưu; từ chối các trường hợp nêu ở [Dành cho người đóng gói](#dành-cho-người-đóng-gói).
 - Script `scripts/build-license-template.ps1` dựng file mẫu để xuất bản (B5); ba giá trị theo sản phẩm được kiểm là trống.
 - Kết quả kiểm với Excel thật (08/11/2026): `dotnet test ToolVba.sln` 247/247, build cả solution không cảnh báo, self-test 24/24 bước, `contract-check.ps1` đạt, **64/64** mock và **57/57** hồi quy có chữ ký; ca đóng file (người dùng trả lời Không, và đối chứng không hủy) và ca hai `Auto_Open` đã ghi trong [module README](license-sample/api-v1-one-file/README.md#ca-đóng-file-và-auto_open). Kích hoạt thật sản phẩm thử `test-01` trên `shop.sunprime.vn` đã đạt trước đó.
-- File thử: `out/test-01/test-01_1.0.0_ban-quyen.xlsm` (sheet "Huong dan" hiện, sheet "Du lieu" VeryHidden, có module và sự kiện ThisWorkbook). Thư mục `out/` không commit.
-- Đã làm xong trên `digital-license-api` (08/11/2026, DEC-113, chờ deploy): trang **Thiết bị** cho khách (xem máy, file trên từng máy, gỡ máy; tự gỡ tối đa bằng số thiết bị của gói trong 30 ngày, quá thì liên hệ hỗ trợ). Admin tách tab **Nhân viên** và **Khách hàng** (chi tiết khách có giấy phép và máy; admin gỡ máy không giới hạn).
+- Đã deploy trên `digital-license-api` (09/11/2026, DEC-113): trang **Thiết bị** cho khách (xem máy, file trên từng máy, gỡ máy; tự gỡ tối đa bằng số thiết bị của gói trong 30 ngày, quá thì liên hệ hỗ trợ). Admin tách tab **Nhân viên** và **Khách hàng** (chi tiết khách có giấy phép và máy; admin gỡ máy không giới hạn).
 
 ### Quyết định đã chốt
 
@@ -204,13 +203,12 @@ Cập nhật 08/11/2026, nhánh `feat/license-packaging` (chưa push; làm cùng
 - `AccessVBOM` bật bằng **Bật giúp tôi** thì giữ nguyên.
 - Một tài khoản ADMIN do chủ dự án quản lý.
 - DEC-115 (xem `docs/DECISIONS.md` ở repo API, kèm hai phụ lục): app không đăng nhập, nhận mã đóng gói dán từ Admin; mỗi lần một file một sản phẩm; kết quả `<productKey>_<phiên bản>_ban-quyen.xlsm`; `BeforeSave`/`AfterSave` đặt đầu thủ tục, `BeforeClose` đặt cuối (`If Not Cancel And (ThisWorkbook.Saved) Then …`, phụ lục 3 sau ca CL-1) và bị từ chối nếu có `Exit Sub`/`Exit Function`/`End`; file có `Auto_Open` riêng bị từ chối; máy chủ kiểm `Cfg_ProductKey`/`Cfg_ProductVersion` khi tải file lên.
-- Xóa zip/artifact phân phối cũ sau 1–2 tuần khi kênh API chạy ổn.
+- Zip/artifact phân phối cũ: chủ dự án quyết định gỡ khỏi repo ngày 09/11/2026, sớm hơn kế hoạch 1–2 tuần.
 
 ### Việc tiếp theo
 
-1. Deploy và kiểm thử production theo [Thứ tự deploy và kiểm thử production](#thứ-tự-deploy-và-kiểm-thử-production).
+1. Làm tiếp từ bước 2 của [Thứ tự deploy và kiểm thử production](#thứ-tự-deploy-và-kiểm-thử-production).
 2. Các ca thử tay trong [LicenseGateSmokeTest.md](tests/manual/LicenseGateSmokeTest.md) đã có kết quả (CL-1 đến CL-3 ĐẠT ngày 09/11/2026; AO-3: không `Auto_Open` nào chạy). Còn thiếu nội dung hộp thông báo hiện ra ở AO-3; ghi vào module README khi thử lại.
-3. Xóa zip/artifact phân phối cũ (sau 1–2 tuần khi kênh API chạy ổn).
 
 Để đợt sau (từ review ngày 08/11/2026, chủ dự án đồng ý hoãn):
 

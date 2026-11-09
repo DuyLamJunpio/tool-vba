@@ -12,9 +12,8 @@ Không import cùng các module cũ trong [`license-sample/`](../README.md) vì 
 - Cấu hình chung đã điền (xem [Cấu hình](#cấu-hình)). Giá trị theo sản phẩm vẫn để trống trong source.
 - Cache kích hoạt tách theo sản phẩm: mục Registry `Activation_<productKey>`. Hai sản phẩm trên cùng máy không còn ghi đè kích hoạt của nhau.
 - Hộp thoại kích hoạt chỉ còn Yes/No (bỏ nút Cancel thừa). Mã 8 ký tự được tự chép vào clipboard; khách chỉ cần Ctrl+V trên trang web.
-- Đã thêm: gửi tên máy `device_name` khi redeem (xem [Kích hoạt máy](#kích-hoạt-máy)). File có trường này chỉ được tải lên cửa hàng sau khi API đã deploy bản nhận trường đó.
+- Đã thêm: gửi tên máy `device_name` khi redeem (xem [Kích hoạt máy](#kích-hoạt-máy)). API bản nhận trường này đã deploy ngày 09/11/2026.
 - Script kiểm tra ngoài Excel chưa theo kịp các thay đổi trên (xem [Kiểm tra trước phát hành](#kiểm-tra-trước-phát-hành)).
-- File thử: `out/test-01/test-01_1.0.0_ban-quyen.xlsm` (sheet "Huong dan" hiện, sheet "Du lieu" VeryHidden, có module và sự kiện ThisWorkbook).
 - **Gắn vào sản phẩm do tool-vba làm** (DEC-115): app điền ba giá trị theo sản phẩm, thêm sheet hướng dẫn, ẩn các sheet khác và ghép sự kiện vào thủ tục có sẵn. File mẫu để xuất bản gói dựng bằng [`scripts/build-license-template.ps1`](../../scripts/build-license-template.ps1).
 - Kết quả các ca đóng file và `Auto_Open` (Excel thật): xem [Ca đóng file và `Auto_Open`](#ca-đóng-file-và-auto_open).
 
