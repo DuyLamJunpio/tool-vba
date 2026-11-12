@@ -179,7 +179,7 @@ Kiểm thử tay: [tests/manual/WorkbookSmokeTest.md](tests/manual/WorkbookSmoke
 | `tests/ToolVba.Tests` | Unit test, không cần Excel |
 | `tests/ToolVba.IntegrationRunner` | Self-test và runner thủ công với Excel thật |
 | `tests/manual` | Kịch bản kiểm thử tay |
-| `scripts/` | Tạo khóa ký, build bản app để tải lên Admin web, dựng file `.xlsm` mẫu có module bản quyền |
+| `scripts/` | Tạo khóa ký, build bản app để tải lên Admin web, dựng file `.xlsm` mẫu có module bản quyền, chạy mọi kiểm thử module không cần máy chủ (`run-license-tests.ps1`), dựng file thử module với máy chủ thật (`build-license-dev-workbook.ps1`) |
 | `docs/` | Mục lục, hợp đồng API phát hành, lưu trữ |
 
 ## Trạng thái và việc tiếp theo
@@ -207,6 +207,7 @@ Cập nhật 09/11/2026, nhánh `feat/license-packaging` (đã push; làm cùng 
 
 ### Việc tiếp theo
 
+0. **Module bản quyền bản 11/11/2026 (chưa commit, chưa phát hành):** ghi nhớ lần bị máy chủ từ chối, coi 429/5xx/phản hồi lạ như mất mạng (nới DEC-107 mục 5), các bản sao dùng chung mốc kiểm tra, token được cấp sớm hơn đồng hồ máy tối đa 300 giây (nới DEC-107 mục 4). Đã đạt ngoài và trong Excel với HTTP giả lập (contract-check, static-check, `dotnet test` 250/250, **71/71** mock, **104/104** hồi quy có chữ ký), và đã thử kích hoạt, tạm khóa, mở lại với máy chủ thật bằng file dựng tại chỗ. Trước khi phát hành còn: Compile và hai bộ kiểm thử trên Excel do người chạy, thử tay DC-45 đến DC-47 với máy chủ thật, đặt gói `rvi = 900` và `ogh = 72` (giờ), chép phụ lục sang `docs/DECISIONS.md` của repo API. Xem [phụ lục DEC-107 trong module README](license-sample/api-v1-one-file/README.md#phụ-lục-dec-107-11112026-thu-hồi-lỗi-máy-chủ-nhiều-bản-sao).
 1. Làm tiếp từ bước 2 của [Thứ tự deploy và kiểm thử production](#thứ-tự-deploy-và-kiểm-thử-production).
 2. Các ca thử tay trong [LicenseGateSmokeTest.md](tests/manual/LicenseGateSmokeTest.md) đã có kết quả (CL-1 đến CL-3 ĐẠT ngày 09/11/2026; AO-3: không `Auto_Open` nào chạy). Còn thiếu nội dung hộp thông báo hiện ra ở AO-3; ghi vào module README khi thử lại.
 
