@@ -48,7 +48,12 @@ const checkedCalls = new Set([
   'CacheSave', 'CacheLoad', 'VerifyTokenClaims', 'AcceptVerifiedState', 'StageVerifiedCredential',
   'ClockCanUse', 'ObserveClock', 'RevalidationCycle', 'CanAttemptRefresh', 'AttemptRevalidation',
   'FindPublicKey', 'KeyPairsValid', 'TokenKeyIdsMatch', 'NativeCacheSaveTest', 'NativeCacheLoadTest',
+  'ShouldClearCacheForServerError', 'ShouldRememberServerDenial', 'IsServerRefusal', 'ApiErrorCode',
+  'RememberServerDenial', 'SaveClockWatermark', 'AdoptSharedCacheState', 'RevalidationDue',
 ]);
+// Procedures the 11/11/2026 DEC-107 addendum requires; a missing one must fail here, before Excel.
+const requiredProcedures = ['ShouldRememberServerDenial', 'IsServerRefusal', 'ApiErrorCode',
+  'RememberServerDenial', 'SaveClockWatermark', 'AdoptSharedCacheState', 'RevalidationDue'];
 const reserved = /\b(?:Dim|Const|ByVal|ByRef)\s+(?:Input|Open|Close|Print|Set|Get|Name|Date|Time|Error|Type|Select|Option|Function|Sub|Loop|Next|For|Else|If|Then|Public|Private)\b/i;
 
 for (const target of targets) {
@@ -104,6 +109,9 @@ for (const target of targets) {
     if (closing) assert(blocks.pop() === closing, `${target}:${entry.line}: unmatched ${closing} block`);
   }
   assert(!current, `${target}: unfinished procedure`);
+  for (const name of requiredProcedures) {
+    assert(procedures.has(name.toLowerCase()), `${target}: missing procedure ${name}`);
+  }
   for (const procedure of procedures.values()) {
     for (const entry of procedure.entries) {
       for (const name of checkedCalls) {

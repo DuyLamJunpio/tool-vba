@@ -117,6 +117,10 @@ Private Const CRYPT_STRING_BASE64 As Long = 1
 Private Const CRYPTPROTECT_UI_FORBIDDEN As Long = 1
 Private Const CACHE_APP As String = "DigitalLicenseVbaV1"
 Private Const CACHE_SECTION As String = "Activation"
+Private Const CACHE_DENIED_MARK As String = "denied"
+' The server accepts a request timestamp up to five minutes off; a token's iat may lead this
+' PC's clock by the same margin (DEC-107 addendum, 11/11/2026).
+Private Const ISSUED_AT_TOLERANCE_SECONDS As Double = 300#
 
 ' Ed25519 point in extended coordinates; each field element is 16 limbs of 16 bits.
 Private Type EdPoint
@@ -154,6 +158,7 @@ Private mRefreshInProgress As Boolean
 Private mHardDenied As Boolean
 Private mClosing As Boolean
 Private mHadAllowedSession As Boolean
+Private mSharedCacheReadUnix As Double
 
 ' One cache slot per product: products sharing a slot would overwrite each other's activation.
 Private Function CacheSection() As String
@@ -299,10 +304,11 @@ Public Function License_ActivateWithDeviceCode() As Boolean
     Dim cachedFingerprint As String
     Dim cachedTime As Double
     Dim cachedMaxSeen As Double
+    Dim cachedDenied As Boolean
 
     On Error GoTo Failed
     previousMaxSeen = mMaxSeenUnix
-    If CacheLoad(cachedToken, cachedFingerprint, cachedTime, cachedMaxSeen) Then _
+    If CacheLoad(cachedToken, cachedFingerprint, cachedTime, cachedMaxSeen, cachedDenied) Then _
         previousMaxSeen = MaxDouble(previousMaxSeen, cachedMaxSeen)
     ResetLicenseState
     mMaxSeenUnix = previousMaxSeen
@@ -414,6 +420,7 @@ Public Sub License_OnOpen()
     Dim nowUnix As Double
     Dim canUseCached As Boolean
     Dim cachedMaxSeen As Double
+    Dim cachedDenied As Boolean
     Dim issuedUnix As Double
 
     On Error GoTo Failed
@@ -432,7 +439,7 @@ Public Sub License_OnOpen()
         mErrorCode = "DEVICE_UNAVAILABLE"
         Exit Sub
     End If
-    If Not CacheLoad(cachedToken, cachedFingerprint, cachedTime, cachedMaxSeen) Then
+    If Not CacheLoad(cachedToken, cachedFingerprint, cachedTime, cachedMaxSeen, cachedDenied) Then
         mErrorCode = "ACTIVATION_REQUIRED"
         Exit Sub
     End If
@@ -455,9 +462,16 @@ Public Sub License_OnOpen()
                             issuedUnix, cachedMaxSeen
     mSavedMaxSeenUnix = cachedMaxSeen
     If Not ObserveClock(nowUnix) Then Exit Sub
-    If PolicyRequiresOnline(nowUnix, cachedTime, expiry, interval, graceHours) Then
+    ' A refusal stored beside the token (DEC-107 addendum, 11/11/2026) forces an online check on
+    ' every open, and only a successful validation removes it. Until then no offline time.
+    If cachedDenied Or PolicyRequiresOnline(nowUnix, cachedTime, expiry, interval, graceHours) Then
         If AttemptRevalidation(nowUnix) Then Exit Sub
         If mErrorCode <> "NETWORK_UNAVAILABLE" Then Exit Sub
+        If cachedDenied Then
+            mHardDenied = True
+            mErrorCode = "REVALIDATION_REQUIRED"
+            Exit Sub
+        End If
     End If
     nowUnix = UtcUnixNow()
     If Not ObserveClock(nowUnix) Then Exit Sub
@@ -486,16 +500,18 @@ Public Function License_PremiumAllowed() As Boolean
     currentUnix = UtcUnixNow()
     If Len(mToken) > 0 Then
         If Not ObserveClock(currentUnix) Then GoTo Denied
-        If currentUnix >= mLastValidatedUnix + mRevalidateSeconds Or _
-           Not VerifiedStateCanUse(currentUnix) Then
+        ' Another open copy of this product may already have validated, or been refused, in this cycle.
+        If RevalidationDue(currentUnix) Then AdoptSharedCacheState currentUnix
+        If RevalidationDue(currentUnix) Then
             currentCycle = RevalidationCycle(currentUnix, mLastValidatedUnix, mRevalidateSeconds)
             If CanAttemptRefresh(currentCycle, mRefreshAttemptCycle, _
                                  mLastValidatedUnix, mRefreshCycleBase, mRefreshInProgress) Then
                 If Not AttemptRevalidation(currentUnix) Then
                     currentUnix = UtcUnixNow()
                     If Not ObserveClock(currentUnix) Then GoTo Denied
-                    If mErrorCode = "NETWORK_UNAVAILABLE" And Not mHardDenied Then
-                        If PolicyCanUse(currentUnix, mLastValidatedUnix, mExpiresUnix, _
+                    If mErrorCode = "NETWORK_UNAVAILABLE" Then
+                        If Not mHardDenied And _
+                           PolicyCanUse(currentUnix, mLastValidatedUnix, mExpiresUnix, _
                                         mOfflineHours * 3600#) Then
                             AcceptVerifiedState mToken, mFingerprint, mLastValidatedUnix, _
                                                 mExpiresUnix, mRevalidateSeconds, mOfflineHours, _
@@ -542,6 +558,51 @@ Private Function VerifiedStateCanUse(ByVal currentUnix As Double) As Boolean
          currentUnix <= mAllowedUntilUnix)
 End Function
 
+Private Function RevalidationDue(ByVal currentUnix As Double) As Boolean
+    RevalidationDue = _
+        (currentUnix >= mLastValidatedUnix + mRevalidateSeconds Or _
+         Not VerifiedStateCanUse(currentUnix))
+End Function
+
+' Copies of one product on this computer share one cache entry (DEC-107 addendum, 11/11/2026).
+' Before this copy sends a request it takes over what another copy stored: a newer successful
+' validation, so one request per rvi cycle serves every open copy, or a refusal mark, so
+' offline time ends here too.
+Private Sub AdoptSharedCacheState(ByVal currentUnix As Double)
+    Dim token As String
+    Dim fingerprint As String
+    Dim validatedUnix As Double
+    Dim maxSeenUnix As Double
+    Dim denied As Boolean
+    Dim expiry As Double
+    Dim interval As Double
+    Dim graceHours As Double
+    Dim featuresJson As String
+    Dim issuedUnix As Double
+
+    ' At most one read per second: a copy on offline time stays due on every call.
+    If currentUnix = mSharedCacheReadUnix Then Exit Sub
+    mSharedCacheReadUnix = currentUnix
+    If Not CacheLoad(token, fingerprint, validatedUnix, maxSeenUnix, denied) Then Exit Sub
+    If StrComp(fingerprint, mFingerprint, vbBinaryCompare) <> 0 Then Exit Sub
+    If denied And Not mHardDenied Then
+        mHardDenied = True
+        mAllowedUntilUnix = 0
+        mErrorCode = "REVALIDATION_REQUIRED"
+    End If
+    If validatedUnix <= mLastValidatedUnix Then Exit Sub
+    If Not VerifyTokenClaims(token, currentUnix, expiry, interval, _
+                             graceHours, featuresJson, issuedUnix) Then Exit Sub
+    If Not ClockCanUse(currentUnix, maxSeenUnix, issuedUnix) Then Exit Sub
+    StageVerifiedCredential token, fingerprint, validatedUnix, expiry, interval, _
+                            graceHours, featuresJson, issuedUnix, maxSeenUnix
+    If denied Then Exit Sub
+    If PolicyCanUse(currentUnix, validatedUnix, expiry, interval) Then
+        AcceptVerifiedState token, fingerprint, validatedUnix, expiry, interval, _
+                            graceHours, featuresJson, issuedUnix, maxSeenUnix, False
+    End If
+End Sub
+
 Private Function AttemptRevalidation(ByVal currentUnix As Double) As Boolean
     On Error GoTo Failed
     If mClosing Or mRefreshInProgress Or Len(mToken) = 0 Then Exit Function
@@ -567,6 +628,7 @@ Private Function ValidateWithDeviceToken( _
     Dim responseText As String
     Dim httpStatus As Long
     Dim refreshedToken As String
+    Dim apiCode As String
     On Error GoTo Failed
     body = BuildValidateJson(activationToken, fingerprint, _
                              NewRequestId(), UtcUnixNow())
@@ -576,23 +638,24 @@ Private Function ValidateWithDeviceToken( _
         Exit Function
     End If
     If httpStatus < 200 Or httpStatus >= 300 Then
-        If httpStatus >= 500 Then
-            mErrorCode = "SERVER_REJECTED"
-            Exit Function
-        End If
-        If httpStatus = 429 Then
-            mErrorCode = "RATE_LIMITED"
-            Exit Function
-        End If
-        mErrorCode = JsonSimpleString(responseText, "code")
-        If Len(mErrorCode) = 0 Then mErrorCode = "SERVER_REJECTED"
+        ' DEC-107 addendum (11/11/2026): a server fault, a request limit or a reply that is not
+        ' a known API refusal (a proxy block page, for example) is handled like a lost
+        ' connection, so a server incident does not close the files of valid customers.
+        mErrorCode = "NETWORK_UNAVAILABLE"
+        If httpStatus >= 500 Then Exit Function
+        If httpStatus = 429 Then Exit Function
+        apiCode = ApiErrorCode(responseText)
+        If Not IsServerRefusal(apiCode, httpStatus) Then Exit Function
+        mErrorCode = apiCode
         If ShouldClearCacheForServerError(mErrorCode, httpStatus) Then _
             InvalidateCachedActivation mErrorCode
+        If ShouldRememberServerDenial(mErrorCode, httpStatus) Then RememberServerDenial
         Exit Function
     End If
     refreshedToken = JsonSimpleString(responseText, "token")
     If Len(refreshedToken) = 0 Then
-        mErrorCode = "SERVER_RESPONSE_INVALID"
+        ' A 2xx reply without a token did not come from the API (a sign-in page of a network).
+        mErrorCode = "NETWORK_UNAVAILABLE"
         Exit Function
     End If
     ValidateWithDeviceToken = AcceptServerToken(refreshedToken, fingerprint)
@@ -628,8 +691,11 @@ Private Function AcceptServerToken( _
         mErrorCode = "CLOCK_ROLLBACK"
         Exit Function
     End If
-    mMaxSeenUnix = MaxDouble(mMaxSeenUnix, MaxDouble(currentUnix, issuedUnix))
-    If Not CacheSave(issuedToken, fingerprint, currentUnix, mMaxSeenUnix) Then
+    ' The watermark follows this PC's clock only; an iat ahead of it must not become a floor
+    ' that the very next check would fail.
+    mMaxSeenUnix = MaxDouble(mMaxSeenUnix, currentUnix)
+    ' The only save without the refusal mark: the server has just granted access.
+    If Not CacheSave(issuedToken, fingerprint, currentUnix, mMaxSeenUnix, False) Then
         mErrorCode = "CACHE_UNAVAILABLE"
         Exit Function
     End If
@@ -679,7 +745,7 @@ Private Sub StageVerifiedCredential( _
     mOfflineHours = graceHours
     mFeatures = featuresJson
     mIssuedUnix = issuedUnix
-    mMaxSeenUnix = MaxDouble(mMaxSeenUnix, MaxDouble(maxSeenUnix, issuedUnix))
+    mMaxSeenUnix = MaxDouble(mMaxSeenUnix, maxSeenUnix)
 End Sub
 
 Private Sub ResetLicenseState()
@@ -702,6 +768,7 @@ Private Sub ResetLicenseState()
     mHardDenied = False
     mClosing = False
     mHadAllowedSession = False
+    mSharedCacheReadUnix = 0
 End Sub
 
 Private Function ConfigReady() As Boolean
@@ -829,7 +896,10 @@ End Sub
 
 Private Function ClockCanUse(ByVal currentUnix As Double, ByVal maxSeenUnix As Double, _
                              ByVal issuedUnix As Double) As Boolean
-    ClockCanUse = (currentUnix > 0 And currentUnix >= maxSeenUnix And currentUnix >= issuedUnix)
+    ' The watermark is this PC's own history and has no tolerance. The signed iat comes from the
+    ' server's clock, so a PC that runs slightly behind must not be refused for it.
+    ClockCanUse = (currentUnix > 0 And currentUnix >= maxSeenUnix And _
+                   currentUnix + ISSUED_AT_TOLERANCE_SECONDS >= issuedUnix)
 End Function
 
 Private Function ObserveClock(ByVal currentUnix As Double) As Boolean
@@ -838,9 +908,9 @@ Private Function ObserveClock(ByVal currentUnix As Double) As Boolean
         mAllowedUntilUnix = 0
         Exit Function
     End If
-    mMaxSeenUnix = MaxDouble(mMaxSeenUnix, MaxDouble(currentUnix, mIssuedUnix))
+    mMaxSeenUnix = MaxDouble(mMaxSeenUnix, currentUnix)
     If Len(mToken) > 0 And mMaxSeenUnix > mSavedMaxSeenUnix Then
-        If Not CacheSave(mToken, mFingerprint, mLastValidatedUnix, mMaxSeenUnix) Then
+        If Not SaveClockWatermark() Then
             mErrorCode = "CACHE_UNAVAILABLE"
             mAllowedUntilUnix = 0
             Exit Function
@@ -848,6 +918,28 @@ Private Function ObserveClock(ByVal currentUnix As Double) As Boolean
         mSavedMaxSeenUnix = mMaxSeenUnix
     End If
     ObserveClock = True
+End Function
+
+' The cache entry is shared by every open copy of this product. Saving the clock watermark
+' therefore rewrites what the entry holds now, not this copy's memory, so a copy with an older
+' token cannot undo another copy's validation or refusal mark.
+Private Function SaveClockWatermark() As Boolean
+    Dim token As String
+    Dim fingerprint As String
+    Dim validatedUnix As Double
+    Dim maxSeenUnix As Double
+    Dim denied As Boolean
+    Dim observedUnix As Double
+    SaveClockWatermark = True
+    ' Another copy cleared the entry: nothing to refresh, and nothing to put back.
+    If Not CacheLoad(token, fingerprint, validatedUnix, maxSeenUnix, denied) Then Exit Function
+    If StrComp(fingerprint, mFingerprint, vbBinaryCompare) <> 0 Then Exit Function
+    ' The stored watermark never decreases, but this copy keeps judging the clock by what it has
+    ' seen itself: another Excel process may have stored a time one second ahead of the sample in use.
+    observedUnix = mMaxSeenUnix
+    SaveClockWatermark = CacheSave(token, fingerprint, validatedUnix, _
+                                   MaxDouble(maxSeenUnix, mMaxSeenUnix), denied)
+    mMaxSeenUnix = observedUnix
 End Function
 
 Private Function RevalidationCycle(ByVal currentUnix As Double, ByVal validatedUnix As Double, _
@@ -906,6 +998,55 @@ Private Function ShouldClearCacheForServerError( _
             ShouldClearCacheForServerError = True
     End Select
 End Function
+
+' Refusals that mean "no entitlement any more" (DEC-107 addendum, 11/11/2026). They are stored
+' beside the token so that switching the network off afterwards does not bring offline time back.
+Private Function ShouldRememberServerDenial( _
+    ByVal status As String, ByVal httpStatus As Long) As Boolean
+
+    If httpStatus < 400 Or httpStatus >= 500 Or httpStatus = 429 Then Exit Function
+    Select Case status
+        Case "LICENSE_REVOKED", "LICENSE_SUSPENDED", "LICENSE_EXPIRED", _
+             "DEVICE_LIMIT_EXCEEDED", "LICENSE_NOT_FOUND"
+            ShouldRememberServerDenial = True
+    End Select
+End Function
+
+' True only for a 4xx reply (not 429) that carries one of the API codes this module acts on.
+' Every other failed validate-device reply is handled like a lost connection.
+Private Function IsServerRefusal( _
+    ByVal status As String, ByVal httpStatus As Long) As Boolean
+
+    If httpStatus < 400 Or httpStatus >= 500 Or httpStatus = 429 Then Exit Function
+    IsServerRefusal = _
+        (ShouldClearCacheForServerError(status, httpStatus) Or _
+         ShouldRememberServerDenial(status, httpStatus) Or _
+         status = "REQUEST_TIMESTAMP_INVALID")
+End Function
+
+' The stable code of an API error body: {"success":false,...,"code":"X",...}. Empty for anything
+' that is not a JSON object, so a page that merely contains a code is never obeyed.
+Private Function ApiErrorCode(ByVal responseText As String) As String
+    Dim re As Object
+    Set re = CreateObject("VBScript.RegExp")
+    re.Pattern = "^\s*\{[\s\S]*\}\s*$"
+    If Not re.Test(responseText) Then Exit Function
+    ApiErrorCode = JsonSimpleString(responseText, "code")
+End Function
+
+' Stores the refusal beside the token. The token stays, so a renewed or unblocked license
+' validates again without a new code; only a successful validation saves the entry unmarked.
+Private Sub RememberServerDenial()
+    Dim token As String
+    Dim fingerprint As String
+    Dim validatedUnix As Double
+    Dim maxSeenUnix As Double
+    Dim denied As Boolean
+    If Not CacheLoad(token, fingerprint, validatedUnix, maxSeenUnix, denied) Then Exit Sub
+    If denied Then Exit Sub
+    ' A failed write cannot be repaired here, and this session is refused either way.
+    CacheSave token, fingerprint, validatedUnix, maxSeenUnix, True
+End Sub
 
 Private Sub InvalidateCachedActivation(ByVal status As String)
     mErrorCode = status
@@ -1865,17 +2006,22 @@ End Function
 
 Private Function CacheSave( _
     ByVal token As String, ByVal fingerprint As String, _
-    ByVal validatedUnix As Double, ByVal maxSeenUnix As Double) As Boolean
+    ByVal validatedUnix As Double, ByVal maxSeenUnix As Double, _
+    ByVal denied As Boolean) As Boolean
 
     Dim plain() As Byte
     Dim cipher As String
+    Dim content As String
     On Error GoTo Failed
     If Not IsJwtCharacters(token) Or Not IsHex64(fingerprint) Then Exit Function
     maxSeenUnix = MaxDouble(maxSeenUnix, mMaxSeenUnix)
     If validatedUnix <= 0 Or maxSeenUnix < validatedUnix Then Exit Function
     mMaxSeenUnix = maxSeenUnix
-    plain = Utf8Bytes(token & vbLf & fingerprint & vbLf & _
-                      Format$(validatedUnix, "0") & vbLf & Format$(maxSeenUnix, "0"))
+    content = token & vbLf & fingerprint & vbLf & _
+              Format$(validatedUnix, "0") & vbLf & Format$(maxSeenUnix, "0")
+    ' The refusal mark is a fifth field. Without it the entry keeps the four-field layout.
+    If denied Then content = content & vbLf & CACHE_DENIED_MARK
+    plain = Utf8Bytes(content)
     cipher = DpapiProtectHex(plain)
     If Len(cipher) = 0 Then Exit Function
     SaveSetting CACHE_APP, CacheSection(), "Ciphertext", cipher
@@ -1888,22 +2034,30 @@ End Function
 
 Private Function CacheLoad( _
     ByRef token As String, ByRef fingerprint As String, _
-    ByRef validatedUnix As Double, ByRef maxSeenUnix As Double) As Boolean
+    ByRef validatedUnix As Double, ByRef maxSeenUnix As Double, _
+    ByRef denied As Boolean) As Boolean
 
     Dim cipher As String
     Dim plain() As Byte
     Dim fields() As String
+    Dim marked As Boolean
     On Error GoTo Failed
     token = vbNullString
     fingerprint = vbNullString
     validatedUnix = 0
     maxSeenUnix = 0
+    denied = False
     cipher = GetSetting(CACHE_APP, CacheSection(), "Ciphertext", vbNullString)
     If Len(cipher) = 0 Then Exit Function
     plain = DpapiUnprotectHex(cipher)
     If ByteCount(plain) = 0 Then Exit Function
     fields = Split(Utf8Text(plain), vbLf)
-    If UBound(fields) <> 3 Then Exit Function
+    ' Four fields, or five when a server refusal is stored beside the token.
+    If UBound(fields) <> 3 And UBound(fields) <> 4 Then Exit Function
+    If UBound(fields) = 4 Then
+        If fields(4) <> CACHE_DENIED_MARK Then Exit Function
+        marked = True
+    End If
     If Not IsJwtCharacters(fields(0)) Then Exit Function
     If Not IsHex64(fields(1)) Then Exit Function
     validatedUnix = Val(fields(2))
@@ -1911,6 +2065,7 @@ Private Function CacheLoad( _
     If validatedUnix <= 0 Or maxSeenUnix < validatedUnix Then Exit Function
     token = fields(0)
     fingerprint = fields(1)
+    denied = marked
     CacheLoad = True
     Exit Function
 Failed:
@@ -1918,6 +2073,7 @@ Failed:
     fingerprint = vbNullString
     validatedUnix = 0
     maxSeenUnix = 0
+    denied = False
     CacheLoad = False
 End Function
 
@@ -2106,9 +2262,38 @@ Public Sub License_RunMockTests()
     If Not ShouldClearCacheForServerError("LICENSE_EXPIRED", 403) Then countPassed = countPassed + 1
     If Not ShouldClearCacheForServerError("LICENSE_SUSPENDED", 403) Then countPassed = countPassed + 1
     If Not ShouldClearCacheForServerError("TOKEN_INVALID", 429) Then countPassed = countPassed + 1
+    If ShouldRememberServerDenial("LICENSE_REVOKED", 403) And _
+       ShouldRememberServerDenial("LICENSE_SUSPENDED", 403) And _
+       ShouldRememberServerDenial("LICENSE_EXPIRED", 403) And _
+       ShouldRememberServerDenial("DEVICE_LIMIT_EXCEEDED", 403) And _
+       ShouldRememberServerDenial("LICENSE_NOT_FOUND", 404) Then countPassed = countPassed + 1
+    If Not ShouldRememberServerDenial("LICENSE_REVOKED", 429) And _
+       Not ShouldRememberServerDenial("LICENSE_REVOKED", 503) And _
+       Not ShouldRememberServerDenial("LICENSE_REVOKED", 200) Then countPassed = countPassed + 1
+    If Not ShouldRememberServerDenial("DEVICE_REVOKED", 403) And _
+       Not ShouldRememberServerDenial("TOKEN_INVALID", 401) And _
+       Not ShouldRememberServerDenial("DEVICE_MISMATCH", 403) And _
+       Not ShouldRememberServerDenial("REQUEST_TIMESTAMP_INVALID", 400) And _
+       Not ShouldRememberServerDenial("RATE_LIMITED", 403) And _
+       Not ShouldRememberServerDenial(vbNullString, 403) Then countPassed = countPassed + 1
+    If IsServerRefusal("LICENSE_REVOKED", 403) And IsServerRefusal("DEVICE_REVOKED", 403) And _
+       IsServerRefusal("TOKEN_INVALID", 401) And _
+       IsServerRefusal("REQUEST_TIMESTAMP_INVALID", 400) Then countPassed = countPassed + 1
+    If Not IsServerRefusal("RATE_LIMITED", 429) And Not IsServerRefusal("LICENSE_REVOKED", 500) And _
+       Not IsServerRefusal("RATE_LIMITED", 403) And Not IsServerRefusal("SOMETHING_ELSE", 403) And _
+       Not IsServerRefusal(vbNullString, 403) And _
+       Not IsServerRefusal("DEVICE_REVOKED", 302) Then countPassed = countPassed + 1
+    If ApiErrorCode("{""success"":false,""statusCode"":403,""code"":""LICENSE_REVOKED"",""message"":""x""}") = _
+       "LICENSE_REVOKED" And _
+       ApiErrorCode(" " & vbCrLf & "{""code"":""DEVICE_REVOKED""}" & vbLf) = "DEVICE_REVOKED" Then countPassed = countPassed + 1
+    If Len(ApiErrorCode("<html><body>""code"":""DEVICE_REVOKED""</body></html>")) = 0 And _
+       Len(ApiErrorCode(vbNullString)) = 0 And _
+       Len(ApiErrorCode("{""statusCode"":404,""message"":""Not Found""}")) = 0 And _
+       Len(ApiErrorCode("""code"":""TOKEN_INVALID""")) = 0 Then countPassed = countPassed + 1
     If ClockCanUse(110#, 100#, 105#) Then countPassed = countPassed + 1
     If Not ClockCanUse(99#, 100#, 90#) Then countPassed = countPassed + 1
-    If Not ClockCanUse(100#, 90#, 101#) Then countPassed = countPassed + 1
+    If ClockCanUse(100#, 90#, 101#) And ClockCanUse(100#, 90#, 400#) And _
+       Not ClockCanUse(100#, 90#, 401#) Then countPassed = countPassed + 1
     If ClockCanUse(100#, 100#, 100#) Then countPassed = countPassed + 1
     If Not ClockCanUse(0#, 0#, 0#) Then countPassed = countPassed + 1
     If MaxDouble(100#, 90#) = 100# Then countPassed = countPassed + 1
@@ -2140,10 +2325,10 @@ Public Sub License_RunMockTests()
     If SystemDriveName("C:\") = "C:" Then countPassed = countPassed + 1
     If SystemDriveName("D:") = "D:" Then countPassed = countPassed + 1
     If ArrayItemCount(Array()) = 0 Then countPassed = countPassed + 1
-    If countPassed = 64 Then
-        MsgBox "64 phep thu gia lap dat. Khong goi API va khong cap quyen.", vbInformation
+    If countPassed = 71 Then
+        MsgBox "71 phep thu gia lap dat. Khong goi API va khong cap quyen.", vbInformation
     Else
-        MsgBox "Phep thu gia lap that bai: " & CStr(countPassed) & "/64.", vbExclamation
+        MsgBox "Phep thu gia lap that bai: " & CStr(countPassed) & "/71.", vbExclamation
     End If
 End Sub
 
