@@ -6,9 +6,10 @@ Module có cổng mở file, kích hoạt bằng mã thiết bị (device-code/r
 
 Không import cùng các module cũ trong [`license-sample/`](../README.md) vì trùng tên thủ tục. File `.bas` thuần ASCII; thông báo tiếng Việt không dấu.
 
-## Trạng thái (08/11/2026)
+## Trạng thái (11/11/2026)
 
-- Đã kiểm tra: **64/64** mock test (`License_RunMockTests`) trong Excel thật, và kích hoạt thật sản phẩm thử `test-01` trên `shop.sunprime.vn`.
+- **Thu hồi, lỗi máy chủ và nhiều bản sao (11/11/2026, chưa commit, chưa phát hành):** module ghi nhớ lần bị máy chủ từ chối, coi 429/5xx/phản hồi lạ như mất mạng, và các bản sao của một sản phẩm dùng chung một mốc kiểm tra. Chi tiết và việc còn phải làm trước khi phát hành: [Phụ lục DEC-107](#phụ-lục-dec-107-11112026-thu-hồi-lỗi-máy-chủ-nhiều-bản-sao).
+- Đã kiểm tra bản 11/11/2026 trong Excel thật (Excel ẩn, HTTP/cache/UI giả lập): **71/71** mock test (`License_RunMockTests`) và **104/104** ca hồi quy có chữ ký. Chưa thử lại với máy chủ thật. Bản 08/11/2026 (64 mock) đã kích hoạt thật sản phẩm thử `test-01` trên `shop.sunprime.vn`.
 - Cấu hình chung đã điền (xem [Cấu hình](#cấu-hình)). Giá trị theo sản phẩm vẫn để trống trong source.
 - Cache kích hoạt tách theo sản phẩm: mục Registry `Activation_<productKey>`. Hai sản phẩm trên cùng máy không còn ghi đè kích hoạt của nhau.
 - Hộp thoại kích hoạt chỉ còn Yes/No (bỏ nút Cancel thừa). Mã 8 ký tự được tự chép vào clipboard; khách chỉ cần Ctrl+V trên trang web.
@@ -66,7 +67,7 @@ Từ DEC-115, **tool-vba làm các bước 1 đến 3 dưới đây khi bấm T�
 5. `Auto_Open` là cổng khi mở file trực tiếp. Nếu chương trình khác mở bằng `Workbooks.Open`, nó phải gọi `RunAutoMacros xlAutoOpen` hoặc có cổng `Workbook_Open` phù hợp. Cổng chỉ chạy **một lần**. File **không được có `Auto_Open` thứ hai** ở module khác: Excel khi đó không chạy cái nào (xem [Ca đóng file và `Auto_Open`](#ca-đóng-file-và-auto_open)); tool-vba từ chối file như vậy.
 6. Trong thủ tục cần quyền: `If Not License_FeatureAllowed("feature_key") Then Exit Sub`, hoặc `License_PremiumAllowed()` nếu chỉ kiểm tra quyền chung.
 
-Tự gia hạn giữa phiên chỉ xảy ra khi một hàm kiểm tra quyền được gọi; không có timer nền. Khi đến `rvi` hoặc quyền hiện tại hết dùng được, module thử online tối đa một lần mỗi chu kỳ `rvi`, có cờ chống gọi lồng. Thành công thì khách làm tiếp. Lỗi mạng chỉ được xét offline khi cache còn `exp`/`ogh`. Hết quyền giữa phiên thì ẩn sheet, hiện hướng dẫn và đóng riêng workbook không lưu.
+Tự gia hạn giữa phiên chỉ xảy ra khi một hàm kiểm tra quyền được gọi; không có timer nền. Khi đến `rvi` hoặc quyền hiện tại hết dùng được, module đọc lại cache dùng chung trước (bản sao khác có thể vừa validate xong), rồi mới thử online tối đa một lần mỗi chu kỳ `rvi`, có cờ chống gọi lồng. Thành công thì khách làm tiếp. Mất mạng, 429, 5xx hoặc phản hồi không phải của API chỉ được xét offline khi cache còn `exp`/`ogh` và không có dấu từ chối. Hết quyền giữa phiên thì ẩn sheet, hiện hướng dẫn và đóng riêng workbook không lưu.
 
 Ẩn sheet chỉ hạn chế chia sẻ thông thường, không mã hóa nội dung. Macro bị tắt thì VBA không đóng được file; bản phân phối đã lưu ẩn chỉ hiện sheet hướng dẫn. Người có kỹ thuật vẫn có thể sửa VBA hoặc trích dữ liệu.
 
@@ -114,17 +115,102 @@ Quản lý thiết bị trên `digital-license-api` (xong 08/11/2026, DEC-113, c
 
 - Token được kiểm tra chữ ký trước khi tin payload, rồi kiểm tra `kid`, `prd`, `ver`, `dev`, `lic`, `jti`, `exp`, `rvi`, `ogh`, `iat`, `feat` và fingerprint cache. `rvi`/`ogh` chỉ lấy từ token đã ký.
 - DEC-104: token chỉ quá `exp` vẫn dùng làm credential để gọi validate-device. Không dùng offline, không bắt nhập mã lại. Token mới nhận về phải chưa hết hạn. `ogh = 0` buộc validate online khi mở, kể cả chưa đến `rvi`. Server từ chối rõ ràng thì không dùng grace.
-- Cache duy nhất là ciphertext DPAPI trong HKCU (`SaveSetting "DigitalLicenseVbaV1", "Activation_<productKey>"`). Gồm token, fingerprint, thời điểm validate thành công và **thời điểm lớn nhất đã thấy**. Entropy là nhãn công khai cố định gắn với product key.
+- `rvi` tính bằng giây, `ogh` tính bằng **giờ** (`plan.offlineGraceHours` của API; module nhân với 3600). Gói "15 phút, 72 giờ" là `rvi = 900`, `ogh = 72`.
+- Cache duy nhất là ciphertext DPAPI trong HKCU (`SaveSetting "DigitalLicenseVbaV1", "Activation_<productKey>"`). Gồm token, fingerprint, thời điểm validate thành công và **thời điểm lớn nhất đã thấy**; thêm trường thứ năm `denied` khi máy chủ đã từ chối (xem [Phụ lục DEC-107](#phụ-lục-dec-107-11112026-thu-hồi-lỗi-máy-chủ-nhiều-bản-sao)). Cache bốn trường do bản module trước ghi vẫn đọc được. Entropy là nhãn công khai cố định gắn với product key.
+- Mục cache theo sản phẩm, không theo tên hay đường dẫn workbook: mọi bản sao của một sản phẩm trên cùng máy và cùng tài khoản Windows dùng chung token, mốc validate và dấu từ chối.
 - Cache không giải mã được coi như chưa kích hoạt, không hiện lỗi. Mục chung `Activation` của bản module trước không còn được đọc. Không có token/fingerprint/device_code trong sheet, log, URL hay hộp thoại.
-- Đồng hồ: mốc giờ chỉ tăng, cập nhật khi kiểm tra quyền, **không dời thời điểm validate** nên không kéo dài `rvi`/`ogh`. Giờ UTC nhỏ hơn mốc đã lưu hoặc `iat` đã ký: `CLOCK_ROLLBACK`, giữ cache; khách bật đồng bộ giờ Windows rồi mở lại. Không chống được việc xóa/khôi phục cả cache.
+- Đồng hồ: mốc giờ chỉ tăng, cập nhật khi kiểm tra quyền, **không dời thời điểm validate** nên không kéo dài `rvi`/`ogh`. Giờ UTC nhỏ hơn mốc đã lưu, hoặc nhỏ hơn `iat` đã ký quá 300 giây: `CLOCK_ROLLBACK`, giữ cache; khách bật đồng bộ giờ Windows rồi mở lại. `iat` không được gộp vào mốc giờ (xem thay đổi 4 trong phụ lục). Không chống được việc xóa/khôi phục cả cache.
 - Phục hồi: xóa cache khi fingerprint khác máy, token cache sai chữ ký/`kid`/`prd`/`ver`, hoặc HTTP 4xx (trừ 429) trả `TOKEN_INVALID`, `DEVICE_REVOKED`, `DEVICE_MISMATCH`. Xóa thành công mới đề nghị mã mới, tối đa một lần mỗi lần mở. Xóa thất bại: `CACHE_UNAVAILABLE`.
-- Không xóa cache vì mất mạng, 429, timestamp sai, 5xx, `LICENSE_EXPIRED`, `LICENSE_SUSPENDED`. Sau gia hạn/mở khóa dùng lại credential cũ.
+- Không xóa cache vì mất mạng, 429, timestamp sai, 5xx, phản hồi không phải của API, `LICENSE_EXPIRED`, `LICENSE_SUSPENDED`, `LICENSE_REVOKED`, `DEVICE_LIMIT_EXCEEDED`, `LICENSE_NOT_FOUND`. Sau gia hạn/mở khóa dùng lại credential cũ.
 - Fingerprint dùng serial ổ `%SystemDrive%`. Ổ `C:` giữ đầu vào hash như bản cũ; máy dùng ổ hệ thống khác có thể phải kích hoạt lại.
 - HTTPS chỉ TLS 1.2/1.3, tắt redirect, giữ kiểm tra chứng chỉ.
 
+## Phụ lục DEC-107 (11/11/2026): thu hồi, lỗi máy chủ, nhiều bản sao
+
+Chủ dự án thu hồi một giấy phép trên Admin và file ở máy khách vẫn chạy. Máy chủ đã đúng; ba thay đổi dưới đây nằm ở module. **Thay đổi 2 nới DEC-107 mục 5** ("chỉ lỗi mạng mới được dùng thời gian offline"), chủ dự án đồng ý. **Thay đổi 1 và 3 là bổ sung**, không thay quy tắc nào của DEC-107. **Thay đổi 4 nới DEC-107 mục 4** (`iat` là mốc sàn tuyệt đối), chủ dự án đồng ý ngày 11/11/2026 sau khi thử với máy chủ thật. DEC-107 gốc nằm trong `docs/DECISIONS.md` của `digital-license-api`; file đó **chưa được cập nhật** theo phụ lục này.
+
+### 1. Ghi nhớ lần bị máy chủ từ chối
+
+- Trước đây: máy chủ trả `LICENSE_REVOKED`, file đóng, cache giữ nguyên. Khách tắt mạng rồi mở lại thì module coi là mất mạng và cho dùng đến hết `ogh`.
+- Nay: khi validate-device trả HTTP 4xx (trừ 429) với `LICENSE_REVOKED`, `LICENSE_SUSPENDED`, `LICENSE_EXPIRED`, `DEVICE_LIMIT_EXCEEDED` hoặc `LICENSE_NOT_FOUND`, module ghi dấu `denied` vào cache DPAPI, cạnh token. Token vẫn được giữ.
+- Khi dấu còn: không cấp quyền bằng thời gian offline dù token còn `exp` và `ogh`; mỗi lần mở file đều thử validate online, kể cả chưa đến `rvi`; mất mạng, 429, 5xx hoặc phản hồi lạ thì từ chối với hướng dẫn "Can ket noi mang de xac minh lai giay phep."
+- Chỉ một lần máy chủ cấp token thành công mới ghi cache không có dấu. Sau gia hạn hoặc mở khóa mà token cũ còn được nhận, khách chỉ cần mở file khi có mạng.
+- `TOKEN_INVALID`, `DEVICE_REVOKED`, `DEVICE_MISMATCH` vẫn xóa cache như cũ và mời nhập mã mới một lần; dấu mất theo cache. Khách quay lại dùng được cũng qua đường này, máy đã kích hoạt trước đó không tốn thêm suất:
+  - **Tạm khóa rồi "Mở lại":** máy chủ đã đóng mọi lượt kích hoạt nên token cũ nhận `DEVICE_REVOKED`, khách nhập mã mới một lần.
+  - **Thu hồi là vĩnh viễn** (DEC-128 viết lại ngày 11/11/2026; không có "Cấp lại"): giấy phép đã thu hồi không bao giờ hoạt động lại, khách cần một giấy phép mới. Khi tài khoản đã có giấy phép đang hoạt động mà luồng mã thiết bị chấp nhận cho đúng sản phẩm, phiên bản và máy đó, `validate-device` trả `DEVICE_REVOKED` thay cho `LICENSE_REVOKED`; quy tắc này cũng áp dụng cho giấy phép đã hủy do hoàn tiền và giấy phép hết hạn. Chưa có giấy phép mới thì máy chủ vẫn trả `LICENSE_REVOKED` và dấu từ chối còn nguyên. Quy tắc nằm ở máy chủ, module không phải sửa; ngày 11/11/2026 nó chưa được triển khai.
+- Giới hạn đã chấp nhận: khôi phục toàn bộ cache từ bản sao lưu thì vượt được dấu.
+
+### 2. Máy chủ lỗi hoặc chặn vì gọi nhiều thì coi như mất mạng
+
+- Trước đây: 429 (`RATE_LIMITED`), 5xx và mọi phản hồi không có mã lỗi nhận ra được (`SERVER_REJECTED`) đều từ chối ngay, không dùng `ogh`. Máy chủ gặp sự cố sẽ đóng file của mọi khách hợp lệ.
+- Nay: các trường hợp sau được xử lý y như mất mạng (dùng tiếp nếu token còn `exp` và còn trong `ogh`, không thông báo, không đổi cache, không dời mốc validate):
+  - HTTP 429 và HTTP 5xx, bất kể thân phản hồi ghi mã gì.
+  - Phản hồi không phải lời từ chối của API: thân không phải một đối tượng JSON (ví dụ trang chặn 403 kèm HTML của proxy công ty, kể cả khi trang đó chứa chuỗi `"code":"DEVICE_REVOKED"`), JSON không có mã, mã không thuộc danh sách module xử lý, hoặc trạng thái 3xx.
+  - HTTP 2xx nhưng không có `token` (ví dụ trang đăng nhập Wi-Fi trả 200). Trước đây là `SERVER_RESPONSE_INVALID` và từ chối.
+- Chỉ coi là máy chủ từ chối khi phản hồi là HTTP 4xx (trừ 429), thân là JSON và `code` là một trong: năm mã ở mục 1, ba mã xóa cache, hoặc `REQUEST_TIMESTAMP_INVALID`.
+- Không đổi: `REQUEST_TIMESTAMP_INVALID` (từ chối, giữ cache, không ghi dấu, không dùng `ogh`, hướng dẫn chỉnh giờ rồi đóng file; lần mở sau thử lại) và `CLOCK_ROLLBACK`. Token mới máy chủ trả về mà sai chữ ký hoặc đã hết hạn vẫn bị từ chối như cũ.
+- Việc nới này không làm yếu thêm bảo mật: người muốn né thu hồi vốn đã có thể tự chặn mạng và được đúng khoảng `ogh` đó.
+
+### 3. Các bản sao trên cùng máy dùng chung một mốc kiểm tra
+
+- Trước đây: khóa cache đã theo sản phẩm (đúng), nhưng giữa phiên mỗi bản sao chỉ nhìn biến trong bộ nhớ của mình nên N bản sao gọi máy chủ N lần mỗi chu kỳ. Nặng hơn: mỗi lần lưu mốc giờ, bản sao ghi đè cache bằng token và mốc validate cũ của chính nó, làm mất token mới của bản sao khác.
+- Nay:
+  - Khi đến hạn theo bộ nhớ, bản sao đọc lại cache trước. Nếu cache có mốc validate mới hơn và token qua được kiểm tra chữ ký, claim và đồng hồ, bản sao dùng token và mốc đó, không gọi máy chủ trong chu kỳ này. N bản sao đang mở tạo khoảng một lần validate mỗi chu kỳ `rvi` (giới hạn 60 lần mỗi giờ tính cho cả tài khoản).
+  - Lưu mốc giờ chỉ cập nhật mốc giờ; token, mốc validate và dấu từ chối đang có trong cache được giữ nguyên. Cache đã bị bản sao khác xóa thì không ghi lại.
+  - Dấu từ chối nằm trong cache chung: một bản sao bị từ chối thì các bản sao khác bị từ chối ở lần kiểm tra đến hạn kế tiếp của chúng (chậm nhất sau một chu kỳ `rvi`), dù có mạng hay không.
+  - Token lấy từ cache chung chỉ được dùng sau đúng các kiểm tra như khi mở file (chữ ký, `kid`, `prd`, `ver`, chưa hết `exp`, fingerprint của máy này, mốc giờ không đi trước đồng hồ). Không qua thì bản sao bỏ qua cache và validate bằng token của chính nó.
+  - Cache chung được đọc lại tối đa một lần mỗi giây, nên macro gọi hàm kiểm tra quyền trong vòng lặp không bị chậm.
+  - Mốc giờ lưu trong cache không bao giờ giảm, nhưng mỗi bản sao vẫn xét lùi đồng hồ theo mốc chính nó đã thấy. Một Excel khác ghi mốc sớm hơn một giây không làm bản sao này báo nhầm `CLOCK_ROLLBACK`.
+- Khi mất mạng hoặc máy chủ trả 429/5xx, mỗi bản sao vẫn tự thử một lần mỗi chu kỳ (N lần thử thất bại); chỉ lần thành công mới được dùng chung.
+- Giới hạn chưa xử lý: các bản sao mở trong **hai tiến trình Excel khác nhau** ghi cache không có khóa chung. Nếu một bản lưu mốc giờ đúng vào vài chục mili giây bản kia đang ghi dấu từ chối, dấu có thể bị ghi đè; bản còn mở sẽ ghi lại dấu ở lần validate kế tiếp có mạng. Các bản sao trong cùng một cửa sổ Excel chạy tuần tự nên không gặp. Muốn đóng hẳn cần một mutex Win32 theo sản phẩm; chưa làm vì ngoài phạm vi phụ lục.
+- Nếu ghi dấu từ chối thất bại (lỗi ghi Registry), phiên đó vẫn bị từ chối nhưng dấu không được lưu; module không đổi thông báo sang `CACHE_UNAVAILABLE` để khách vẫn thấy đúng lý do máy chủ trả.
+- Chỉ áp dụng cho các bản sao **cùng sản phẩm và cùng phiên bản**. Hai phiên bản khác nhau của một sản phẩm dùng chung mục cache nhưng token ghi `ver` khác nhau, nên mở xen kẽ sẽ xóa kích hoạt của nhau và hỏi mã mới. Đây là hành vi có từ trước, chưa đổi.
+
+### 4. Token được cấp sớm hơn đồng hồ máy tối đa 300 giây
+
+- Trước đây: thời điểm cấp `iat` trong token là mốc sàn tuyệt đối. Máy có đồng hồ chậm hơn máy chủ, dù dưới một giây, thì token máy chủ vừa cấp bị xem là đến từ tương lai: `CLOCK_ROLLBACK`, file đóng, kể cả ngay sau khi khách duyệt mã kích hoạt. Thử thật ngày 11/11/2026 trên máy chậm 0,8 giây: 3 trong 4 lần máy chủ cấp token bị từ chối.
+- Nay: `iat` được phép đi trước đồng hồ máy tối đa 300 giây (`ISSUED_AT_TOLERANCE_SECONDS`), bằng dung sai máy chủ dành cho `timestamp` của yêu cầu. Quá 300 giây vẫn là `CLOCK_ROLLBACK`.
+- `iat` không còn được gộp vào mốc giờ lớn nhất đã thấy. Mốc đó chỉ theo đồng hồ của chính máy, nên không bao giờ vượt quá giờ máy.
+- Giữ nguyên: giờ máy nhỏ hơn mốc đã lưu thì `CLOCK_ROLLBACK`, không có dung sai; mốc chỉ tăng; cập nhật mốc không dời thời điểm validate.
+- Cái giá: người lùi đồng hồ được lợi thêm tối đa 5 phút so với trước.
+
+### Kết quả thử với máy chủ thật (11/11/2026)
+
+File dựng tại chỗ bằng `scripts\build-license-dev-workbook.ps1` cho `quan-ly-van-ban` 1.0.0, một tài khoản khách thử, chạy trong Excel ẩn với các hộp thoại thay bằng ghi file (mã mạng, chữ ký và cache là mã thật):
+
+| Bước | Kết quả |
+| --- | --- |
+| Kích hoạt bằng mã thiết bị | Đạt; token cho `rvi = 900`, `ogh = 72` |
+| Mở file chính, bản sao, file giả lập mất mạng trong chu kỳ đầu | Cả ba `ACTIVE`, không hỏi mã, không gửi yêu cầu |
+| Admin | Vẫn một máy, hai file trên máy đó |
+| Tạm khóa; mở file mất mạng trước lần kiểm tra online | `ACTIVE` (lỗ hổng cũ: chưa có lần từ chối nào được ghi) |
+| Mở file chính có mạng | `LICENSE_SUSPENDED`, sheet ẩn, cache giữ |
+| Mở lại file mất mạng | `REVALIDATION_REQUIRED` |
+| Mở bản sao | `LICENSE_SUSPENDED` |
+| "Mở lại" trên Admin; mở file mất mạng | Vẫn `REVALIDATION_REQUIRED` |
+| Mở file chính | `DEVICE_REVOKED`, cache bị xóa; bản sao `ACTIVATION_REQUIRED` |
+| Kích hoạt lại, đồng hồ máy chậm 0,8 giây | Trước thay đổi 4: `CLOCK_ROLLBACK`. Sau thay đổi 4: đạt |
+| Hai bản sao mở cùng lúc, kiểm tra ngay sau khi hết chu kỳ 15 phút (sau thay đổi 4) | File chính gửi 1 yêu cầu và `ACTIVE`; bản sao gửi 0 yêu cầu và `ACTIVE`. Một phút sau vẫn 1 và 0 |
+
+"Thu hồi" chưa thử trên production vì thu hồi là vĩnh viễn. Kịch bản thu hồi, mở file khi mất mạng, khách có giấy phép mới, máy chủ trả `DEVICE_REVOKED` sẽ thử bằng một giấy phép thử sau khi API triển khai quy tắc của DEC-128 (viết lại ngày 11/11/2026).
+
+### Việc phải làm trên Excel Windows trước khi phát hành
+
+1. Import `modLicenseApiV1.bas` vào một `.xlsm` thử riêng, Debug → Compile VBAProject, chạy `License_RunMockTests`: **71/71**.
+2. Chạy `node .\tests\build-excel-regression.mjs D:\Code\digital-license-api`, import `TestResults/modLicenseRegression.bas` vào workbook thử riêng, Compile, chạy `License_RunSignedRegressionTests`: **104/104**.
+3. Thử tay với máy chủ thật các ca DC-45, DC-46, DC-47 trong [DeviceCodeActivationSmokeTest.md](../../tests/manual/DeviceCodeActivationSmokeTest.md) (thu hồi rồi tắt mạng; 429 trong và ngoài `ogh`; hai bản sao).
+4. Đặt gói đúng đơn vị: `rvi = 900` (giây), `ogh = 72` (giờ).
+5. Cập nhật DEC-107 trong `docs/DECISIONS.md` của `digital-license-api` theo phụ lục này.
+
 ## Kiểm tra trước phát hành
 
-Ngoài Excel (tại thư mục này):
+Ba mức, từ nhanh đến đầy đủ:
+
+1. **Không cần máy chủ** (khoảng 1 phút): `.\scripts\run-license-tests.ps1` tại gốc repo chạy contract-check, dựng bộ hồi quy, static-check và hai bộ VBA trong một Excel ẩn riêng. Dùng sau mỗi lần sửa module.
+2. **Máy chủ thật, file dựng tại chỗ:** `.\scripts\build-license-dev-workbook.ps1 -ProductKey test-01 -Version 1.0.0` dựng ba file thử trong `out\license-dev\` từ module đang có trong thư mục làm việc (file chính, một bản sao, và một bản giả lập mất mạng bằng proxy chết). Không phải phát hành gói VBA, dán bằng app, đăng bán hay tải về bằng tài khoản khác. Sản phẩm và phiên bản phải có sẵn trên cửa hàng và tài khoản thử phải sở hữu. Ba file dùng chung mục cache `Activation_<productKey>`. **Chỉ để thử, không gửi cho khách.**
+3. **Cả chuỗi phát hành** (gói VBA ký, app dán mã, tải lên, tải về): một lần trước mỗi đợt phát hành, vì nó kiểm những thứ khác (chữ ký gói, ba giá trị app điền, kiểm tra khi tải lên, Mark of the Web).
+
+Từng bước của mức 1, khi cần chạy riêng (tại thư mục này):
 
 ```powershell
 powershell -NoProfile -File .\contract-check.ps1
@@ -134,6 +220,7 @@ node .\tests\vba-static-check.mjs
 
 - `contract-check.ps1`: ràng buộc hợp đồng/bảo mật, ASCII, SHA-256 manifest (chữ hoa). Không nới kiểm tra để qua.
 - Hai script đã cập nhật theo 08/11/2026: URL production, kid `k-d7b49d36a6111497`, cache theo sản phẩm (`CacheSection()`), hộp thoại Yes/No, clipboard, `device_name`. Bộ hồi quy thay URL production bằng `regression.invalid` nên không gọi được `shop.sunprime.vn`. Kết quả 08/11/2026: contract-check PASS, 64/64 mock, 57/57 signed.
+- Cập nhật 11/11/2026 theo [Phụ lục DEC-107](#phụ-lục-dec-107-11112026-thu-hồi-lỗi-máy-chủ-nhiều-bản-sao): `contract-check.ps1` đổi ba chuỗi bắt buộc theo thiết kế mới (điều kiện gọi online khi mở có thêm dấu từ chối, cache bốn hoặc năm trường, 71 mock) và thêm các ràng buộc cho ba thay đổi, kể cả cấm `Application.OnTime`; `vba-static-check.mjs` kiểm thêm các thủ tục mới; bộ hồi quy có thêm dấu từ chối trong cache giả và phản hồi thô (trang HTML). Kết quả 11/11/2026: contract-check PASS, static-check PASS, 71/71 mock, 104/104 signed, `dotnet test` 250/250.
 - **Thứ tự phát hành:** file có `device_name` chỉ được tải lên cửa hàng **sau khi** API đã deploy bản nhận trường này. API cũ từ chối trường lạ nên redeem sẽ lỗi.
 - `vba-static-check.mjs`: ASCII, cấu trúc khối, số tham số. **Không phải trình biên dịch VBA.**
 - Tại `D:\Code\tool-vba`: `dotnet test ToolVba.sln --no-restore`. Nếu chỉ được ghi thư mục này, thêm `-p:DirectoryBuildPropsPath=<thư mục này>\tests\workspace-output.props --results-directory <thư mục này>\TestResults\dotnet-results`.
@@ -141,12 +228,12 @@ node .\tests\vba-static-check.mjs
 Trong Excel Windows:
 
 1. Tạo `.xlsm` thử riêng, import `modLicenseApiV1.bas`, Debug → Compile VBAProject.
-2. Chạy `License_RunMockTests`: kỳ vọng **64/64** (8 gốc/KAT RFC 8032, 8 policy, 16 phục hồi cache, 32 clock/cycle/key ring/DPAPI/SystemDrive). Không gọi API, không ghi Registry, không cấp quyền.
-3. Sau lệnh `build-excel-regression.mjs`, import `TestResults/modLicenseRegression.bas` vào workbook thử riêng, Compile, chạy `License_RunSignedRegressionTests`: kỳ vọng **57/57**. Bộ sinh dùng API signer với khóa test tạm trong bộ nhớ, không đọc `.env`. **Không đưa module hồi quy vào file khách.**
+2. Chạy `License_RunMockTests`: kỳ vọng **71/71** (8 gốc/KAT RFC 8032, 8 policy, 16 phục hồi cache, 7 phân loại phản hồi của máy chủ, 32 clock/cycle/key ring/DPAPI/SystemDrive). Không gọi API, không ghi Registry, không cấp quyền.
+3. Sau lệnh `build-excel-regression.mjs`, import `TestResults/modLicenseRegression.bas` vào workbook thử riêng, Compile, chạy `License_RunSignedRegressionTests`: kỳ vọng **104/104** (38 ca bảng, 5 ca cổng/khôi phục, 61 ca `Case_*`). Bộ sinh dùng API signer với khóa test tạm trong bộ nhớ, không đọc `.env`. **Không đưa module hồi quy vào file khách.**
 
-Chạy tự động trong Excel ẩn (ví dụ trên máy không có người ngồi): các `MsgBox` báo kết quả làm Excel ẩn treo, nên chạy trên **bản sao** nơi mỗi `MsgBox` kết quả được thay bằng ghi một ô (ví dụ `Sheet1!A1 = "PASS 64/64"`); không sửa file trong repo. Ghi PID Excel khi chạy, nếu treo chỉ dừng đúng PID đó. Kết quả 08/11/2026 theo cách này: 64/64 (module thật) và 57/57.
+Chạy tự động trong Excel ẩn (ví dụ trên máy không có người ngồi): các `MsgBox` báo kết quả làm Excel ẩn treo, nên chạy trên **bản sao** nơi mỗi `MsgBox` kết quả được thay bằng ghi một ô (ví dụ `Sheet1!A1 = "PASS 71/71"`); không sửa file trong repo. Ghi PID Excel khi chạy, nếu treo chỉ dừng đúng PID đó. Kết quả 08/11/2026 theo cách này: 64/64 (module thật) và 57/57. Kết quả 11/11/2026: 71/71 và 104/104; thêm 16 lần chạy trên bản sao bị cố ý làm hỏng từng phần của phụ lục (không ghi dấu, bỏ qua dấu, 429/5xx từ chối như cũ, tin mọi thân có `code`, không đọc cache chung, lưu mốc giờ bằng bộ nhớ riêng, dùng token của cache chung mà không kiểm tra...) đều bị bộ hồi quy báo trượt.
 4. Kích hoạt thật một sản phẩm thử trên `shop.sunprime.vn` (như `test-01`). Không ghi/chụp token, fingerprint, device_code.
-5. Chạy các ca thủ công cần thiết trong [tests/manual/DeviceCodeActivationSmokeTest.md](../../tests/manual/DeviceCodeActivationSmokeTest.md) (44 ca).
+5. Chạy các ca thủ công cần thiết trong [tests/manual/DeviceCodeActivationSmokeTest.md](../../tests/manual/DeviceCodeActivationSmokeTest.md) (49 ca; DC-45 đến DC-47 là bắt buộc cho bản 11/11/2026).
 
 Kết quả bắt buộc:
 
@@ -154,11 +241,13 @@ Kết quả bắt buộc:
 | --- | --- |
 | Kích hoạt, phục hồi cache | Chỉ hiện user_code; duyệt Store rồi redeem. Cache invalid/revoked/mismatch chỉ đề nghị mã mới một lần sau khi xóa. Xóa lỗi thì khóa, không lặp. |
 | DEC-104, `ogh = 0` | Chỉ quá exp thì gia hạn online, offline khóa. `ogh = 0` vẫn validate khi mở. |
-| Lỗi tạm thời | Mất mạng/429/timestamp/5xx/expired/suspended giữ credential. Server từ chối không được grace. |
+| Lỗi tạm thời | Mất mạng/429/timestamp/5xx/phản hồi lạ/expired/suspended giữ credential. Mất mạng, 429, 5xx và phản hồi không phải của API được dùng `ogh`, không thông báo. Server từ chối không được grace. |
+| Thu hồi, tạm khóa | Server từ chối bằng một trong năm mã quyền: ghi dấu, giữ token, đóng file. Tắt mạng mở lại vẫn bị từ chối. Chỉ validate thành công mới xóa dấu. |
+| Nhiều bản sao | Các bản sao cùng sản phẩm, cùng phiên bản không hỏi mã lại, tính một máy, khoảng một lần validate mỗi chu kỳ `rvi`. Một bản bị từ chối thì các bản khác bị từ chối ở lần kiểm tra kế tiếp. |
 | Sheet | Bản lưu: chỉ "Huong dan" hiện. Có quyền mới hiện sheet khác. Close bằng code, Save/SaveAs, mở lại với macro tắt đều không lộ sheet. Cấu hình sai thì fail-closed. |
 | Đồng hồ | Giờ lùi: `CLOCK_ROLLBACK`, giữ cache. Mốc không giảm; tăng mốc không kéo dài `rvi`/`ogh`. Dùng VM. |
 | Giữa phiên | Một request mỗi chu kỳ `rvi`, chặn gọi lồng, không timer nền. |
-| DPAPI | Round-trip đủ bốn trường; cache cũ/khác sản phẩm coi như chưa kích hoạt. |
+| DPAPI | Round-trip đủ bốn trường, thêm trường dấu từ chối khi có; cache bốn trường của bản trước vẫn dùng được; cache không entropy/khác sản phẩm coi như chưa kích hoạt. |
 | HTTPS, proxy | TLS 1.2/1.3, không bỏ qua chứng chỉ, không redirect. Thử trực tiếp, proxy tĩnh, PAC, override. |
 | Ổ hệ thống, hai khóa | `C:` giữ fingerprint. Cả hai khóa hợp lệ được nhận khi cấu hình đủ; kid lạ, header/payload lệch, sai khóa đều bị từ chối. |
 
