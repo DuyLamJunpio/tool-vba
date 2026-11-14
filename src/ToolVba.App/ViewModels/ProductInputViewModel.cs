@@ -12,6 +12,7 @@ internal sealed class ProductInputViewModel : ObservableObject
     private string _productKey = "";
     private string _version = "";
     private string? _codeError;
+    private string? _vbaPassword;
     private bool _filling;
 
     public event EventHandler? ProductChanged;
@@ -22,28 +23,36 @@ internal sealed class ProductInputViewModel : ObservableObject
         set
         {
             if (!Set(ref _packagingCode, value)) return;
+            _vbaPassword = null;
             if (string.IsNullOrWhiteSpace(value))
             {
                 CodeError = null;
                 return;
             }
-            var (product, error) = LicenseProduct.FromPackagingCode(value);
+            var (code, error) = LicenseProduct.ReadPackagingCode(value);
             CodeError = error;
-            if (product is not null) Fill(product);
+            if (code is not null)
+            {
+                _vbaPassword = code.VbaPassword;
+                Fill(code.Product);
+            }
         }
     }
 
     public string ProductKeyText
     {
         get => _productKey;
-        set { if (Set(ref _productKey, value) && !_filling) Changed(); }
+        set { if (Set(ref _productKey, value) && !_filling) { _vbaPassword = null; Changed(); } }
     }
 
     public string VersionText
     {
         get => _version;
-        set { if (Set(ref _version, value) && !_filling) Changed(); }
+        set { if (Set(ref _version, value) && !_filling) { _vbaPassword = null; Changed(); } }
     }
+
+    /// <summary>The server-set VBA lock password from the pasted code, or null when typed by hand or none was given.</summary>
+    public string? VbaPassword => CodeError is null ? _vbaPassword : null;
 
     /// <summary>
     /// The valid product, or null while a field is empty or wrong, or while the pasted code is wrong: the fields

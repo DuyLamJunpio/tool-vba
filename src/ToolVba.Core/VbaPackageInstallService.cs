@@ -67,6 +67,21 @@ public sealed class VbaPackageInstallService(
             var verifyError = VerifySaved(work.SavedPath, package, outcome);
             if (verifyError is not null) return VbaPackageInstallResult.Failure(verifyError + " Bản tạm đã bị loại bỏ; file nguồn không bị sửa.");
 
+            // Lock the VBA project only after the read-back check: a locked project can no longer be read (DEC-116).
+            if (!string.IsNullOrEmpty(request.VbaPassword))
+            {
+                progress?.Report(new("Đang khoá VBA project bằng mật khẩu.", 80));
+                try
+                {
+                    VbaProjectLocker.Lock(work.SavedPath, request.VbaPassword);
+                }
+                catch (Exception ex) when (ExcelVbaInjector.IsExpectedFileException(ex))
+                {
+                    return VbaPackageInstallResult.Failure(
+                        "Không khoá được VBA project cho file kết quả. Bản tạm đã bị loại bỏ; file nguồn không bị sửa.");
+                }
+            }
+
             progress?.Report(new("Đang kiểm tra package Open XML.", 85));
             var finalError = FinalCheck(work.SavedPath, package, paths, inputHash, request.ConfirmOutputOverwrite);
             if (finalError is not null) return VbaPackageInstallResult.Failure(finalError);

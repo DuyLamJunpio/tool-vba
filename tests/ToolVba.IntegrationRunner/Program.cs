@@ -158,8 +158,8 @@ static async Task<int> RunBasIntegrationAsync(string inputArg, string moduleArg,
 // Signature checks belong to the app's download path; this mode is for manual testing only.
 static async Task<int> RunPackageInstallAsync(string workbookArg, string zipArg, string outputArg, string packagingCode)
 {
-    var (product, productError) = LicenseProduct.FromPackagingCode(packagingCode);
-    if (product is null)
+    var (code, productError) = LicenseProduct.ReadPackagingCode(packagingCode);
+    if (code is null)
     {
         Console.Error.WriteLine("FAIL: " + productError);
         return 2;
@@ -176,7 +176,8 @@ static async Task<int> RunPackageInstallAsync(string workbookArg, string zipArg,
         Console.WriteLine("Gói gồm: " + string.Join(", ", read.Package!.Components.Select(c => $"{c.Name} ({c.Kind})")));
         var progress = new Progress<VbaInstallProgress>(p => Console.WriteLine(p.Stage));
         var result = await new VbaPackageInstallService().InstallAsync(
-            new VbaPackageInstallRequest(Path.GetFullPath(workbookArg), Path.GetFullPath(outputArg), read.Package!, product), progress);
+            new VbaPackageInstallRequest(Path.GetFullPath(workbookArg), Path.GetFullPath(outputArg), read.Package!, code.Product,
+                VbaPassword: code.VbaPassword), progress);
         Console.WriteLine((result.Succeeded ? "PASS: " : "FAIL: ") + result.Message);
         foreach (var warning in result.Warnings ?? []) Console.WriteLine("Cảnh báo: " + warning);
         return result.Succeeded ? 0 : 1;
