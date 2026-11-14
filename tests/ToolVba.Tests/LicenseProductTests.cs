@@ -162,4 +162,58 @@ public sealed class LicenseProductTests
         Assert.Null(product);
         Assert.Contains("Phiên bản", error, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Reads_a_packaging_code_with_a_vba_lock_password()
+    {
+        var (code, error) = LicenseProduct.ReadPackagingCode(
+            "{\"productKey\":\"test-01\",\"version\":\"1.0.0\",\"vbaPassword\":\"QWxhZGRpbjpvcGVu\"}");
+
+        Assert.Null(error);
+        Assert.Equal(new LicenseProduct("test-01", "1.0.0"), code!.Product);
+        Assert.Equal("QWxhZGRpbjpvcGVu", code.VbaPassword);
+    }
+
+    [Fact]
+    public void Reads_a_packaging_code_without_a_password_as_no_lock()
+    {
+        var (code, error) = LicenseProduct.ReadPackagingCode("{\"productKey\":\"test-01\",\"version\":\"1.0.0\"}");
+
+        Assert.Null(error);
+        Assert.Null(code!.VbaPassword);
+    }
+
+    [Fact]
+    public void FromPackagingCode_still_returns_the_product_when_a_password_is_present()
+    {
+        var (product, error) = LicenseProduct.FromPackagingCode(
+            "{\"productKey\":\"test-01\",\"version\":\"1.0.0\",\"vbaPassword\":\"QWxhZGRpbg==\"}");
+
+        Assert.Null(error);
+        Assert.Equal(new LicenseProduct("test-01", "1.0.0"), product);
+    }
+
+    [Theory]
+    [InlineData("{\"productKey\":\"test-01\",\"version\":\"1.0.0\",\"vbaPassword\":\"\"}")]        // empty
+    [InlineData("{\"productKey\":\"test-01\",\"version\":\"1.0.0\",\"vbaPassword\":\"ab\\tcd\"}")]  // tab is a control char
+    [InlineData("{\"productKey\":\"test-01\",\"version\":\"1.0.0\",\"vbaPassword\":\"mật\"}")]      // non-ASCII
+    public void Refuses_a_packaging_code_with_an_invalid_vba_password(string text)
+    {
+        var (code, error) = LicenseProduct.ReadPackagingCode(text);
+
+        Assert.Null(code);
+        Assert.Contains("vbaPassword", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Refuses_a_vba_password_longer_than_the_dialog_allows()
+    {
+        var text = "{\"productKey\":\"test-01\",\"version\":\"1.0.0\",\"vbaPassword\":\"" +
+                   new string('a', LicenseProduct.MaxVbaPasswordLength + 1) + "\"}";
+
+        var (code, error) = LicenseProduct.ReadPackagingCode(text);
+
+        Assert.Null(code);
+        Assert.Contains("vbaPassword", error, StringComparison.Ordinal);
+    }
 }

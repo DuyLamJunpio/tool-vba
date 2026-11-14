@@ -1,12 +1,14 @@
 namespace ToolVba.Core;
 
 /// <param name="Product">The store product and version the licensing module is filled for (DEC-115).</param>
+/// <param name="VbaPassword">The server-set password to lock the VBA project with, or null to leave it open (DEC-116).</param>
 public sealed record VbaPackageInstallRequest(
     string InputWorkbookPath,
     string OutputPath,
     VbaPackage Package,
     LicenseProduct Product,
-    bool ConfirmOutputOverwrite = false);
+    bool ConfirmOutputOverwrite = false,
+    string? VbaPassword = null);
 
 public sealed record VbaPackageInstallResult(
     bool Succeeded,

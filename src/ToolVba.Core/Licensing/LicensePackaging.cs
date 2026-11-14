@@ -70,6 +70,9 @@ internal static class LicensePackaging
         var (code, configError) = LicenseModuleConfigurator.Configure(
             File.ReadAllText(module.FilePath, Encoding.Latin1), product, sheets.ProtectedNames);
         if (code is null) return (null, configError);
+        // Strip the comments and blank lines after configuring so the per-product settings stay intact,
+        // then import that copy: a casual reader loses the narrated logic, VerifySaved still matches (DEC-116).
+        code = VbaSourceMinifier.StripCommentsAndBlankLines(code);
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, Path.GetFileName(module.FilePath));
         File.WriteAllBytes(path, Encoding.Latin1.GetBytes(code));

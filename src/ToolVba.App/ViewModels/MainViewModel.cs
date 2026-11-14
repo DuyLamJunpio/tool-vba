@@ -192,7 +192,8 @@ internal sealed class MainViewModel : ObservableObject
         VbaPackageInstallResult result;
         try
         {
-            result = await _services.Installer.InstallAsync(new(item.SourcePath, item.OutputPath, package, product), progress);
+            result = await _services.Installer.InstallAsync(
+                new(item.SourcePath, item.OutputPath, package, product, VbaPassword: Product.VbaPassword), progress);
         }
         finally
         {
